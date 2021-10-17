@@ -85,7 +85,8 @@ void Preprocess::avia_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg)
     pl_buff[i].reserve(plsize);
   }
   uint valid_num = 0;
-  
+
+  //特征提取
   if (feature_enabled)
   {
     for(uint i=1; i<plsize; i++)
@@ -99,6 +100,7 @@ void Preprocess::avia_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg)
         pl_full[i].curvature = msg->points[i].offset_time / float(1000000); //use curvature as time of each laser points
 
         bool is_new = false;
+        //初步筛选特征？
         if((abs(pl_full[i].x - pl_full[i-1].x) > 1e-7) 
             || (abs(pl_full[i].y - pl_full[i-1].y) > 1e-7)
             || (abs(pl_full[i].z - pl_full[i-1].z) > 1e-7))
@@ -114,12 +116,12 @@ void Preprocess::avia_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg)
     for(int j=0; j<N_SCANS; j++)
     {
       if(pl_buff[j].size() <= 5) continue;
-      pcl::PointCloud<PointType> &pl = pl_buff[j];
+      pcl::PointCloud<PointType> &pl = pl_buff[j];//当前line的点云
       plsize = pl.size();
-      vector<orgtype> &types = typess[j];
+      vector<orgtype> &types = typess[j];//用于记录每个点的距离、角度、特征种类等属性
       types.clear();
       types.resize(plsize);
-      plsize--;
+      plsize--;//???
       for(uint i=0; i<plsize; i++)
       {
         types[i].range = sqrt(pl[i].x * pl[i].x + pl[i].y * pl[i].y);
@@ -129,7 +131,7 @@ void Preprocess::avia_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg)
         types[i].dista = sqrt(vx * vx + vy * vy + vz * vz);
       }
       types[plsize].range = sqrt(pl[plsize].x * pl[plsize].x + pl[plsize].y * pl[plsize].y);
-      give_feature(pl, types);
+      give_feature(pl, types); //通过点和每个点的属性，计算特征
       // pl_surf += pl;
     }
     time += omp_get_wtime() - t0;
@@ -434,7 +436,7 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
 void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &types)
 {
   int plsize = pl.size();
-  int plsize2;
+  int plsize2; //用于估计特征的点数
   if(plsize == 0)
   {
     printf("something wrong\n");

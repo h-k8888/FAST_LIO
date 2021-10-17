@@ -112,7 +112,7 @@ PointCloudXYZI::Ptr laserCloudOri(new PointCloudXYZI(100000, 1));
 PointCloudXYZI::Ptr corr_normvect(new PointCloudXYZI(100000, 1));
 PointCloudXYZI::Ptr _featsArray;
 
-pcl::VoxelGrid<PointType> downSizeFilterSurf;
+pcl::VoxelGrid<PointType> downSizeFilterSurf; //表面降采样仍使voxel grid?
 pcl::VoxelGrid<PointType> downSizeFilterMap;
 
 KD_TREE ikdtree;
@@ -121,8 +121,8 @@ V3F XAxisPoint_body(LIDAR_SP_LEN, 0.0, 0.0);
 V3F XAxisPoint_world(LIDAR_SP_LEN, 0.0, 0.0);
 V3D euler_cur;
 V3D position_last(Zero3d);
-V3D Lidar_T_wrt_IMU(Zero3d);
-M3D Lidar_R_wrt_IMU(Eye3d);
+V3D Lidar_T_wrt_IMU(Zero3d);//T lidar to imu (imu = r * lidar + t)
+M3D Lidar_R_wrt_IMU(Eye3d);//R lidar to imu (imu = r * lidar + t)
 
 /*** EKF inputs and output ***/
 MeasureGroup Measures;
@@ -801,9 +801,10 @@ int main(int argc, char** argv)
     memset(res_last, -1000.0f, sizeof(res_last));
     downSizeFilterSurf.setLeafSize(filter_size_surf_min, filter_size_surf_min, filter_size_surf_min);
     downSizeFilterMap.setLeafSize(filter_size_map_min, filter_size_map_min, filter_size_map_min);
-    memset(point_selected_surf, true, sizeof(point_selected_surf));
+    memset(point_selected_surf, true, sizeof(point_selected_surf));//重复？
     memset(res_last, -1000.0f, sizeof(res_last));
 
+    //设置imu和lidar外参和imu参数等
     Lidar_T_wrt_IMU<<VEC_FROM_ARRAY(extrinT);
     Lidar_R_wrt_IMU<<MAT_FROM_ARRAY(extrinR);
     p_imu->set_extrinsic(Lidar_T_wrt_IMU, Lidar_R_wrt_IMU);

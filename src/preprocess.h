@@ -15,10 +15,11 @@ enum Feature{Nor, Poss_Plane, Real_Plane, Edge_Jump, Edge_Plane, Wire, ZeroPoint
 enum Surround{Prev, Next};
 enum E_jump{Nr_nor, Nr_zero, Nr_180, Nr_inf, Nr_blind};
 
+//用于记录每个点的距离、角度、特征种类等属性
 struct orgtype
 {
-  double range;
-  double dista; 
+  double range; //平面距离
+  double dista; //与后一个点的距离
   double angle[2];
   double intersect;
   E_jump edj[2];
@@ -95,7 +96,7 @@ class Preprocess
   PointCloudXYZI pl_buff[128]; //maximum 128 line lidar
   vector<orgtype> typess[128]; //maximum 128 line lidar
   int lidar_type, point_filter_num, N_SCANS, SCAN_RATE;
-  double blind;
+  double blind; //xy平面距离，小于此阈值不计算特征
   bool feature_enabled, given_offset_time;
   ros::Publisher pub_full, pub_surf, pub_corn;
     
@@ -110,7 +111,7 @@ class Preprocess
   bool small_plane(const PointCloudXYZI &pl, vector<orgtype> &types, uint i_cur, uint &i_nex, Eigen::Vector3d &curr_direct);
   bool edge_jump_judge(const PointCloudXYZI &pl, vector<orgtype> &types, uint i, Surround nor_dir);
   
-  int group_size;
+  int group_size; //计算特征时需要的最少点数
   double disA, disB, inf_bound;
   double limit_maxmid, limit_midmin, limit_maxmin;
   double p2l_ratio;
