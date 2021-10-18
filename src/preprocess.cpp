@@ -44,7 +44,7 @@ void Preprocess::set(bool feat_en, int lid_type, double bld, int pfilt_num)
 void Preprocess::process(const livox_ros_driver::CustomMsg::ConstPtr &msg, PointCloudXYZI::Ptr &pcl_out)
 {  
   avia_handler(msg);
-  *pcl_out = pl_surf;
+  *pcl_out = pl_surf; // 储存间隔采样点
 }
 
 void Preprocess::process(const sensor_msgs::PointCloud2::ConstPtr &msg, PointCloudXYZI::Ptr &pcl_out)

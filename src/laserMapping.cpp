@@ -100,7 +100,7 @@ vector<PointVector>  Nearest_Points;
 vector<double>       extrinT(3, 0.0);
 vector<double>       extrinR(9, 0.0);
 deque<double>                     time_buffer;
-deque<PointCloudXYZI::Ptr>        lidar_buffer;
+deque<PointCloudXYZI::Ptr>        lidar_buffer; //记录特征提取或间隔采样后的lidar（特征）数据
 deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
 
 PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
@@ -172,7 +172,7 @@ void pointBodyToWorld_ikfom(PointType const * const pi, PointType * const po, st
     po->intensity = pi->intensity;
 }
 
-
+//按当前body(imu)的状态，将局部点转换到世界系下
 void pointBodyToWorld(PointType const * const pi, PointType * const po)
 {
     V3D p_body(pi->x, pi->y, pi->z);
@@ -232,7 +232,7 @@ void lasermap_fov_segment()
     kdtree_delete_counter = 0;
     kdtree_delete_time = 0.0;    
     pointBodyToWorld(XAxisPoint_body, XAxisPoint_world);
-    V3D pos_LiD = pos_lid;
+    V3D pos_LiD = pos_lid; // global系lidar位置
     if (!Localmap_Initialized){
         for (int i = 0; i < 3; i++){
             LocalMap_Points.vertex_min[i] = pos_LiD(i) - cube_len / 2.0;
@@ -322,8 +322,10 @@ void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg)
     }
 
     PointCloudXYZI::Ptr  ptr(new PointCloudXYZI());
+
+    // 特征提取或间隔采样
     p_pre->process(msg, ptr);
-    lidar_buffer.push_back(ptr);
+    lidar_buffer.push_back(ptr); //储存处理后的lidar特征
     time_buffer.push_back(last_timestamp_lidar);
     
     s_plot11[scan_count] = omp_get_wtime() - preprocess_start_time;
@@ -353,7 +355,7 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
         imu_buffer.clear();
     }
 
-    last_timestamp_imu = timestamp;
+    last_timestamp_imu = timestamp; //update imu time
 
     imu_buffer.push_back(msg);
     mtx_buffer.unlock();
@@ -386,6 +388,7 @@ bool sync_packages(MeasureGroup &meas)
         {
             scan_num ++;
             lidar_end_time = meas.lidar_beg_time + meas.lidar->points.back().curvature / double(1000);
+            // 更新每帧lidar数据平均扫描时间
             lidar_mean_scantime += (meas.lidar->points.back().curvature / double(1000) - lidar_mean_scantime) / scan_num;
         }
 
@@ -406,7 +409,7 @@ bool sync_packages(MeasureGroup &meas)
     {
         imu_time = imu_buffer.front()->header.stamp.toSec();
         if(imu_time > lidar_end_time) break;
-        meas.imu.push_back(imu_buffer.front());
+        meas.imu.push_back(imu_buffer.front()); //记录当前lidar帧内的imu数据到meas.imu
         imu_buffer.pop_front();
     }
 
@@ -856,7 +859,9 @@ int main(int argc, char** argv)
     {
         if (flg_exit) break;
         ros::spinOnce();
-        if(sync_packages(Measures)) 
+
+        /// sync_packages(Measures)在Measure内储存当前lidar数据及lidar扫描时间内对应的imu数据序列
+        if(sync_packages(Measures))
         {
             if (flg_first_scan)
             {
@@ -876,8 +881,8 @@ int main(int argc, char** argv)
             t0 = omp_get_wtime();
 
             p_imu->Process(Measures, kf, feats_undistort);
-            state_point = kf.get_x();
-            pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
+            state_point = kf.get_x();// 前向传播后body的状态预测值
+            pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I; // global系 lidar位置
 
             if (feats_undistort->empty() || (feats_undistort == NULL))
             {
@@ -904,8 +909,9 @@ int main(int argc, char** argv)
                     feats_down_world->resize(feats_down_size);
                     for(int i = 0; i < feats_down_size; i++)
                     {
-                        pointBodyToWorld(&(feats_down_body->points[i]), &(feats_down_world->points[i]));
+                        pointBodyToWorld(&(feats_down_body->points[i]), &(feats_down_world->points[i]));//point转到world系下
                     }
+                    // world系下对当前帧降采样后的点建立lkd-tree
                     ikdtree.Build(feats_down_world->points);
                 }
                 continue;
@@ -925,6 +931,7 @@ int main(int argc, char** argv)
             normvec->resize(feats_down_size);
             feats_down_world->resize(feats_down_size);
 
+            // lidar --> imu
             V3D ext_euler = SO3ToEuler(state_point.offset_R_L_I);
             fout_pre<<setw(20)<<Measures.lidar_beg_time - first_lidar_time<<" "<<euler_cur.transpose()<<" "<< state_point.pos.transpose()<<" "<<ext_euler.transpose() << " "<<state_point.offset_T_L_I.transpose()<< " " << state_point.vel.transpose() \
             <<" "<<state_point.bg.transpose()<<" "<<state_point.ba.transpose()<<" "<<state_point.grav<< endl;
@@ -947,11 +954,12 @@ int main(int argc, char** argv)
             /*** iterated state estimation ***/
             double t_update_start = omp_get_wtime();
             double solve_H_time = 0;
+            //todo pcl icp
             kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
             state_point = kf.get_x();
             euler_cur = SO3ToEuler(state_point.rot);
-            pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
-            geoQuat.x = state_point.rot.coeffs()[0];
+            pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;// world系下lidar坐标
+            geoQuat.x = state_point.rot.coeffs()[0];// world系下当前body（imu）的姿态四元数
             geoQuat.y = state_point.rot.coeffs()[1];
             geoQuat.z = state_point.rot.coeffs()[2];
             geoQuat.w = state_point.rot.coeffs()[3];

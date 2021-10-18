@@ -77,9 +77,9 @@ class ImuProcess
   V3D acc_s_last;
   double start_timestamp_;
   double last_lidar_end_time_;
-  int    init_iter_num = 1;
+  int    init_iter_num = 1; // 初始化需要迭代的次数
   bool   b_first_frame_ = true;
-  bool   imu_need_init_ = true;
+  bool   cov_bias_gyrimu_need_init_ = true;
 };
 
 ImuProcess::ImuProcess()
@@ -238,14 +238,15 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
 
   double dt = 0;
 
-  input_ikfom in;
+  input_ikfom in;//记录加速度和角速度，
   for (auto it_imu = v_imu.begin(); it_imu < (v_imu.end() - 1); it_imu++)
   {
     auto &&head = *(it_imu);
     auto &&tail = *(it_imu + 1);
     
     if (tail->header.stamp.toSec() < last_lidar_end_time_)    continue;
-    
+
+    //加速度和角速度均值
     angvel_avr<<0.5 * (head->angular_velocity.x + tail->angular_velocity.x),
                 0.5 * (head->angular_velocity.y + tail->angular_velocity.y),
                 0.5 * (head->angular_velocity.z + tail->angular_velocity.z);
@@ -273,7 +274,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
     Q.block<3, 3>(3, 3).diagonal() = cov_acc;
     Q.block<3, 3>(6, 6).diagonal() = cov_bias_gyr;
     Q.block<3, 3>(9, 9).diagonal() = cov_bias_acc;
-    kf_state.predict(dt, Q, in);
+    kf_state.predict(dt, Q, in);//根据imu数据向前传播
 
     /* save the poses at each IMU measurements */
     imu_state = kf_state.get_x();
@@ -281,18 +282,18 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
     acc_s_last  = imu_state.rot * (acc_avr - imu_state.ba);
     for(int i=0; i<3; i++)
     {
-      acc_s_last[i] += imu_state.grav[i];
+      acc_s_last[i] += imu_state.grav[i];//??
     }
-    double &&offs_t = tail->header.stamp.toSec() - pcl_beg_time;
+    double &&offs_t = tail->header.stamp.toSec() - pcl_beg_time;//m+1时刻与lidar起始时刻时间差
     IMUpose.push_back(set_pose6d(offs_t, acc_s_last, angvel_last, imu_state.vel, imu_state.pos, imu_state.rot.toRotationMatrix()));
   }
 
   /*** calculated the pos and attitude prediction at the frame-end ***/
   double note = pcl_end_time > imu_end_time ? 1.0 : -1.0;
-  dt = note * (pcl_end_time - imu_end_time);
+  dt = note * (pcl_end_time - imu_end_time);// lidar终点与imu终点时间差
   kf_state.predict(dt, Q, in);
   
-  imu_state = kf_state.get_x();
+  imu_state = kf_state.get_x();//lidar终点时刻与imu终点时刻较大者，imu位姿
   last_imu_ = meas.imu.back();
   last_lidar_end_time_ = pcl_end_time;
 
@@ -300,8 +301,8 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   auto it_pcl = pcl_out.points.end() - 1;
   for (auto it_kp = IMUpose.end() - 1; it_kp != IMUpose.begin(); it_kp--)
   {
-    auto head = it_kp - 1;
-    auto tail = it_kp;
+    auto head = it_kp - 1;// 前一imu位姿
+    auto tail = it_kp;// 后一imu位姿
     R_imu<<MAT_FROM_ARRAY(head->rot);
     // cout<<"head imu acc: "<<acc_imu.transpose()<<endl;
     vel_imu<<VEC_FROM_ARRAY(head->vel);
@@ -317,10 +318,10 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
        * Note: Compensation direction is INVERSE of Frame's moving direction
        * So if we want to compensate a point at timestamp-i to the frame-e
        * P_compensate = R_imu_e ^ T * (R_i * P_i + T_ei) where T_ei is represented in global frame */
-      M3D R_i(R_imu * Exp(angvel_avr, dt));
+      M3D R_i(R_imu * Exp(angvel_avr, dt));//R(global <-- i)
       
       V3D P_i(it_pcl->x, it_pcl->y, it_pcl->z);
-      V3D T_ei(pos_imu + vel_imu * dt + 0.5 * acc_imu * dt * dt - imu_state.pos);
+      V3D T_ei(pos_imu + vel_imu * dt + 0.5 * acc_imu * dt * dt - imu_state.pos);//T(i <-- end)
       V3D P_compensate = imu_state.offset_R_L_I.conjugate() * (imu_state.rot.conjugate() * (R_i * (imu_state.offset_R_L_I * P_i + imu_state.offset_T_L_I) + T_ei) - imu_state.offset_T_L_I);// not accurate!
       
       // save Undistorted points and their rotation
@@ -341,8 +342,12 @@ void ImuProcess::Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 
   if(meas.imu.empty()) {return;};
   ROS_ASSERT(meas.lidar != nullptr);
 
+  //imu 初始化，初始化完成后才做畸变纠正
   if (imu_need_init_)
   {
+      //todo
+      /** 1. initializing the gravity, gyro bias, acc and gyro covariance
+        * 2. normalize the acceleration measurenments to unit gravity **/
     /// The very first lidar frame
     IMU_init(meas, kf_state, init_iter_num);
 
