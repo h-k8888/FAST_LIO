@@ -11,7 +11,7 @@ Preprocess::Preprocess()
   SCAN_RATE = 10;
   group_size = 8;
   disA = 0.01;
-  disA = 0.1; // B?
+  disA = 0.1; // B? todo
   p2l_ratio = 225;
   limit_maxmid =6.25;
   limit_midmin =6.25;
@@ -279,21 +279,21 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
     std::vector<float> time_last(N_SCANS, 0.0);  // last offset time
     /*****************************************************************/
 
-    if (pl_orig.points[plsize - 1].time > 0)
+    if (pl_orig.points[plsize - 1].time > 0)//todo check pl_orig.points[plsize - 1].time
     {
       given_offset_time = true;
     }
     else
     {
       given_offset_time = false;
-      double yaw_first = atan2(pl_orig.points[0].y, pl_orig.points[0].x) * 57.29578;
+      double yaw_first = atan2(pl_orig.points[0].y, pl_orig.points[0].x) * 57.29578; // 记录第一个点(index 0)的yaw， to degree
       double yaw_end  = yaw_first;
-      int layer_first = pl_orig.points[0].ring;
-      for (uint i = plsize - 1; i > 0; i--)
+      int layer_first = pl_orig.points[0].ring; // 第一个点(index 0)的layer序号
+      for (uint i = plsize - 1; i > 0; i--) // 倒序遍历，找到与第一个点相同layer的最后一个点
       {
         if (pl_orig.points[i].ring == layer_first)
         {
-          yaw_end = atan2(pl_orig.points[i].y, pl_orig.points[i].x) * 57.29578;
+          yaw_end = atan2(pl_orig.points[i].y, pl_orig.points[i].x) * 57.29578;// 与第一个点相同layer的最后一个点的yaw
           break;
         }
       }
@@ -307,7 +307,7 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
         pl_buff[i].reserve(plsize);
       }
 
-      //计算时间、转换点云格式为PointType
+      //计算时间、转换点云格式为PointType，正序遍历
       for (int i = 0; i < plsize; i++)
       {
         PointType added_pt;
@@ -324,14 +324,14 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
 
         if (!given_offset_time)
         {
-          double yaw_angle = atan2(added_pt.y, added_pt.x) * 57.2957;
-          if (is_first[layer])
+          double yaw_angle = atan2(added_pt.y, added_pt.x) * 57.2957; // 但前点yaw, to degree
+          if (is_first[layer]) // 如果当前点是其对应layer的第一个点
           {
             // printf("layer: %d; is first: %d", layer, is_first[layer]);
-              yaw_fp[layer]=yaw_angle;
+              yaw_fp[layer]=yaw_angle; // 记录为当前点对应layer的起始yaw
               is_first[layer]=false;
-              added_pt.curvature = 0.0;
-              yaw_last[layer]=yaw_angle;
+              added_pt.curvature = 0.0; //当前点curvature（时间）置零
+              yaw_last[layer]=yaw_angle; // 暂时记录为当前点对应layer的结束yaw
               time_last[layer]=added_pt.curvature;
               continue;
           }
@@ -347,8 +347,8 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
 
           if (added_pt.curvature < time_last[layer])  added_pt.curvature+=360.0/omega_l;
 
-          yaw_last[layer] = yaw_angle;
-          time_last[layer]=added_pt.curvature;
+          yaw_last[layer] = yaw_angle; // 记录当前layer最后一个点的yaw
+          time_last[layer]=added_pt.curvature; //  记录当前layer最后一个点的时间
         }
 
         pl_buff[layer].points.push_back(added_pt);
@@ -356,7 +356,7 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
 
       for (int j = 0; j < N_SCANS; j++)
       {
-        PointCloudXYZI &pl = pl_buff[j];
+        PointCloudXYZI &pl = pl_buff[j]; // points_line
         int linesize = pl.size();
         if (linesize < 2) continue;
         vector<orgtype> &types = typess[j];
@@ -444,14 +444,14 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
     return;
   }
   uint head = 0;
-
+  //更新head为第一个大于blind范围的点索引
   while(types[head].range < blind)
   {
     head++;
   }
 
   // Surf
-  plsize2 = (plsize > group_size) ? (plsize - group_size) : 0;
+  plsize2 = (plsize > group_size) ? (plsize - group_size) : 0; // 本layer除group_size之外的剩余点数
 
   Eigen::Vector3d curr_direct(Eigen::Vector3d::Zero());
   Eigen::Vector3d last_direct(Eigen::Vector3d::Zero());
@@ -759,25 +759,26 @@ void Preprocess::pub_func(PointCloudXYZI &pl, const ros::Time &ct)
 
 int Preprocess::plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, uint i_cur, uint &i_nex, Eigen::Vector3d &curr_direct)
 {
-  double group_dis = disA*types[i_cur].range + disB;
+  double group_dis = disA*types[i_cur].range + disB; //disB??
   group_dis = group_dis * group_dis;
   // i_nex = i_cur;
 
   double two_dis;
-  vector<double> disarr;
+  vector<double> disarr; //与后一个点的距离
   disarr.reserve(20);
 
+  //group_size 索引范围内遍历
   for(i_nex=i_cur; i_nex<i_cur+group_size; i_nex++)
   {
-    if(types[i_nex].range < blind)
+    if(types[i_nex].range < blind) // group_size存在点的平面距离小于blind， 方向置零，直接返回2
     {
       curr_direct.setZero();
       return 2;
     }
-    disarr.push_back(types[i_nex].dista);
+    disarr.push_back(types[i_nex].dista); // 保存与后一个点的距离
   }
   
-  for(;;)
+  for(;;) // 继续向后遍历，保存group_dis范围以内，与后一个点的距离
   {
     if((i_cur >= pl.size()) || (i_nex >= pl.size())) break;
 
@@ -789,7 +790,7 @@ int Preprocess::plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, ui
     vx = pl[i_nex].x - pl[i_cur].x;
     vy = pl[i_nex].y - pl[i_cur].y;
     vz = pl[i_nex].z - pl[i_cur].z;
-    two_dis = vx*vx + vy*vy + vz*vz;
+    two_dis = vx*vx + vy*vy + vz*vz; //i_nex点与当前点的距离平方和
     if(two_dis >= group_dis)
     {
       break;
@@ -798,15 +799,15 @@ int Preprocess::plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, ui
     i_nex++;
   }
 
-  double leng_wid = 0;
+  double leng_wid = 0; // todo
   double v1[3], v2[3];
-  for(uint j=i_cur+1; j<i_nex; j++)
+  for(uint j=i_cur+1; j<i_nex; j++) //i_nex为局部范围内索引最大值
   {
     if((j >= pl.size()) || (i_cur >= pl.size())) break;
     v1[0] = pl[j].x - pl[i_cur].x;
     v1[1] = pl[j].y - pl[i_cur].y;
     v1[2] = pl[j].z - pl[i_cur].z;
-
+    // vx,vy,vz为局部范围最后一个点与当前原点的坐标差值，以下为叉乘
     v2[0] = v1[1]*vz - vy*v1[2];
     v2[1] = v1[2]*vx - v1[0]*vz;
     v2[2] = v1[0]*vy - vx*v1[1];
@@ -819,14 +820,14 @@ int Preprocess::plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, ui
   }
 
 
-  if((two_dis*two_dis/leng_wid) < p2l_ratio)
+  if((two_dis*two_dis/leng_wid) < p2l_ratio) // 判断比例，返回0
   {
     curr_direct.setZero();
     return 0;
   }
 
   uint disarrsize = disarr.size();
-  for(uint j=0; j<disarrsize-1; j++)
+  for(uint j=0; j<disarrsize-1; j++) // 排序，disarr按从大到小，leng_wid为最小的相邻点间隔距离
   {
     for(uint k=j+1; k<disarrsize; k++)
     {
@@ -834,7 +835,7 @@ int Preprocess::plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, ui
       {
         leng_wid = disarr[j];
         disarr[j] = disarr[k];
-        disarr[k] = leng_wid;
+        disarr[k] = leng_wid; //j、k互换
       }
     }
   }
