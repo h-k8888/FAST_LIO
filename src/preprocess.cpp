@@ -306,7 +306,8 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
         pl_buff[i].clear();
         pl_buff[i].reserve(plsize);
       }
-      
+
+      //计算时间、转换点云格式为PointType
       for (int i = 0; i < plsize; i++)
       {
         PointType added_pt;

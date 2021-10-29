@@ -79,7 +79,7 @@ class ImuProcess
   double last_lidar_end_time_;
   int    init_iter_num = 1; // 初始化需要迭代的次数
   bool   b_first_frame_ = true;
-  bool   cov_bias_gyrimu_need_init_ = true;
+  bool   imu_need_init_ = true;
 };
 
 ImuProcess::ImuProcess()

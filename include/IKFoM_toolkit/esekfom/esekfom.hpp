@@ -1633,7 +1633,7 @@ public:
 		for(int i=-1; i<maximum_iter; i++)
 		{
 			dyn_share.valid = true;	
-			h_dyn_share(x_, dyn_share);
+			h_dyn_share(x_, dyn_share); //计算残差
 
 			if(! dyn_share.valid)
 			{
