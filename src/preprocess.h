@@ -19,10 +19,10 @@ enum E_jump{Nr_nor, Nr_zero, Nr_180, Nr_inf, Nr_blind};
 struct orgtype
 {
   double range; //平面距离
-  double dista; //与后一个点的距离
+  double dista; //与后一个点的间距
   double angle[2];
   double intersect;
-  E_jump edj[2];
+  E_jump edj[2]; // edge_jump
   Feature ftype;
   orgtype()
   {
@@ -105,16 +105,16 @@ class Preprocess
   void avia_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg);
   void oust64_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
   void velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
-  void give_feature(PointCloudXYZI &pl, vector<orgtype> &types);
+  void give_feature(PointCloudXYZI &pl, vector<orgtype> &types); // 当前扫描线点云， 扫描点属性
   void pub_func(PointCloudXYZI &pl, const ros::Time &ct);
   int  plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, uint i, uint &i_nex, Eigen::Vector3d &curr_direct);
   bool small_plane(const PointCloudXYZI &pl, vector<orgtype> &types, uint i_cur, uint &i_nex, Eigen::Vector3d &curr_direct);
   bool edge_jump_judge(const PointCloudXYZI &pl, vector<orgtype> &types, uint i, Surround nor_dir);
   
-  int group_size; //计算特征时需要的最少点数
-  double disA, disB, inf_bound;
+  int group_size; //计算平面特征时需要的最少局部点数
+  double disA, disB, inf_bound; //
   double limit_maxmid, limit_midmin, limit_maxmin;
-  double p2l_ratio;
+  double p2l_ratio;//??
   double jump_up_limit, jump_down_limit;
   double cos160;
   double edgea, edgeb;

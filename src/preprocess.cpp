@@ -359,7 +359,7 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
         PointCloudXYZI &pl = pl_buff[j]; // points_line
         int linesize = pl.size();
         if (linesize < 2) continue;
-        vector<orgtype> &types = typess[j];
+        vector<orgtype> &types = typess[j]; //用于记录当前扫描线上每个点的参数
         types.clear();
         types.resize(linesize);
         linesize--;
@@ -436,8 +436,8 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
 
 void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &types)
 {
-  int plsize = pl.size();
-  int plsize2; //用于估计特征的点数
+  int plsize = pl.size(); // 输入扫描线的原始点数
+  int plsize2; // 用于估计特征的点数
   if(plsize == 0)
   {
     printf("something wrong\n");
@@ -451,7 +451,7 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
   }
 
   // Surf
-  plsize2 = (plsize > group_size) ? (plsize - group_size) : 0; // 本layer除group_size之外的剩余点数
+  plsize2 = (plsize > group_size) ? (plsize - group_size) : 0; // 本layer除group_size（局部平面点）之外的剩余点数
 
   Eigen::Vector3d curr_direct(Eigen::Vector3d::Zero());
   Eigen::Vector3d last_direct(Eigen::Vector3d::Zero());
@@ -461,42 +461,47 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
   int last_state = 0;
   int plane_type;
 
+    //第一个大于blind范围的点索引开始遍历
   for(uint i=head; i<plsize2; i++)
   {
-    if(types[i].range < blind)
+    if(types[i].range < blind) // blind范围内直接跳过
     {
       continue;
     }
 
-    i2 = i;
+    i2 = i; //i2记录当前点索引
 
+    //输出
+    // i_nex 局部最后最后一个点的索引
+    //curr_direct 归一化后的，局部范围最后一个点与第一个点的坐标差值，即向量（i_cur --> i_nex)
+    //return 1 正常退出， 0 中途break，curr_direct置零
     plane_type = plane_judge(pl, types, i, i_nex, curr_direct);
     
-    if(plane_type == 1)
+    if(plane_type == 1) //plane_judge正常退出
     {
       for(uint j=i; j<=i_nex; j++)
       { 
         if(j!=i && j!=i_nex)
         {
-          types[j].ftype = Real_Plane;
+          types[j].ftype = Real_Plane; // 局部范围内部点定义为real平面点
         }
         else
         {
-          types[j].ftype = Poss_Plane;
+          types[j].ftype = Poss_Plane; // 局部范围边界点定义可能平面
         }
       }
       
       // if(last_state==1 && fabs(last_direct.sum())>0.5)
-      if(last_state==1 && last_direct.norm()>0.1)
+      if(last_state==1 && last_direct.norm()>0.1) // 根据上一状态（局部是平面）和长度（向量模长），决定起始点的类型
       {
         double mod = last_direct.transpose() * curr_direct;
-        if(mod>-0.707 && mod<0.707)
+        if(mod>-0.707 && mod<0.707) // 平面夹角30度
         {
-          types[i].ftype = Edge_Plane;
+          types[i].ftype = Edge_Plane; //平面交接的边
         }
         else
         {
-          types[i].ftype = Real_Plane;
+          types[i].ftype = Real_Plane;//平面
         }
       }
       
@@ -561,19 +566,19 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
   }
 
   plsize2 = plsize > 3 ? plsize - 3 : 0;
-  for(uint i=head+3; i<plsize2; i++)
+  for(uint i=head+3; i<plsize2; i++) // 从head+3向后遍历
   {
-    if(types[i].range<blind || types[i].ftype>=Real_Plane)
+    if(types[i].range<blind || types[i].ftype>=Real_Plane) // 距离太近或这已经判断为edge
     {
       continue;
     }
 
-    if(types[i-1].dista<1e-16 || types[i].dista<1e-16)
+    if(types[i-1].dista<1e-16 || types[i].dista<1e-16) //前两个点间距太小
     {
       continue;
     }
 
-    Eigen::Vector3d vec_a(pl[i].x, pl[i].y, pl[i].z);
+    Eigen::Vector3d vec_a(pl[i].x, pl[i].y, pl[i].z); // sensor到当前点ray
     Eigen::Vector3d vecs[2];
 
     for(int j=0; j<2; j++)
@@ -584,9 +589,9 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
         m = 1;
       }
 
-      if(types[i+m].range < blind)
+      if(types[i+m].range < blind) //索引i的前一个点（m = -1) 或者后一个点（m = 1) ，距离很小
       {
-        if(types[i].range > inf_bound)
+        if(types[i].range > inf_bound) // > 10
         {
           types[i].edj[j] = Nr_inf;
         }
@@ -757,17 +762,18 @@ void Preprocess::pub_func(PointCloudXYZI &pl, const ros::Time &ct)
   output.header.stamp = ct;
 }
 
+// （line点云，点属性， 当前点索引，当前点索引，当前方向）
 int Preprocess::plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, uint i_cur, uint &i_nex, Eigen::Vector3d &curr_direct)
 {
-  double group_dis = disA*types[i_cur].range + disB; //disB??
+  double group_dis = disA*types[i_cur].range + disB; //disB?? 用于限制特征点计算时，局部范围的阈值
   group_dis = group_dis * group_dis;
   // i_nex = i_cur;
 
   double two_dis;
-  vector<double> disarr; //与后一个点的距离
+  vector<double> disarr; //与后一个点的距离，（line内相邻有效点间距）
   disarr.reserve(20);
 
-  //group_size 索引范围内遍历
+  //group_size(计算特征需要的点数，默认8）， 索引范围内遍历
   for(i_nex=i_cur; i_nex<i_cur+group_size; i_nex++)
   {
     if(types[i_nex].range < blind) // group_size存在点的平面距离小于blind， 方向置零，直接返回2
@@ -778,7 +784,7 @@ int Preprocess::plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, ui
     disarr.push_back(types[i_nex].dista); // 保存与后一个点的距离
   }
   
-  for(;;) // 继续向后遍历，保存group_dis范围以内，与后一个点的距离
+  for(;;) // 继续向后遍历，保存group_dis范围以内，与后一个点的间距,记录最后一个局部点索引为i_nex
   {
     if((i_cur >= pl.size()) || (i_nex >= pl.size())) break;
 
@@ -790,8 +796,8 @@ int Preprocess::plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, ui
     vx = pl[i_nex].x - pl[i_cur].x;
     vy = pl[i_nex].y - pl[i_cur].y;
     vz = pl[i_nex].z - pl[i_cur].z;
-    two_dis = vx*vx + vy*vy + vz*vz; //i_nex点与当前点的距离平方和
-    if(two_dis >= group_dis)
+    two_dis = vx*vx + vy*vy + vz*vz; //最后一个点与当前点的距离平方和
+    if(two_dis >= group_dis) // 超出局部间距距离范围约束时，跳出
     {
       break;
     }
@@ -799,20 +805,21 @@ int Preprocess::plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, ui
     i_nex++;
   }
 
-  double leng_wid = 0; // todo
+  double leng_wid = 0; // 记录局部范围内，叉乘的最大模长，即局部范围内最大平行四边形面积
   double v1[3], v2[3];
-  for(uint j=i_cur+1; j<i_nex; j++) //i_nex为局部范围内索引最大值
+  for(uint j=i_cur+1; j<i_nex; j++) //局部范围内，从当前点向后遍历，i_nex为局部范围内索引最大值
   {
     if((j >= pl.size()) || (i_cur >= pl.size())) break;
+    //计算向量（i_cur --> j）
     v1[0] = pl[j].x - pl[i_cur].x;
     v1[1] = pl[j].y - pl[i_cur].y;
     v1[2] = pl[j].z - pl[i_cur].z;
-    // vx,vy,vz为局部范围最后一个点与当前原点的坐标差值，以下为叉乘
+    // vx,vy,vz为局部范围最后一个点与第一个点的坐标差值，即向量（i_cur --> i_nex)，以下为叉乘
     v2[0] = v1[1]*vz - vy*v1[2];
     v2[1] = v1[2]*vx - v1[0]*vz;
     v2[2] = v1[0]*vy - vx*v1[1];
 
-    double lw = v2[0]*v2[0] + v2[1]*v2[1] + v2[2]*v2[2];
+    double lw = v2[0]*v2[0] + v2[1]*v2[1] + v2[2]*v2[2]; // 叉乘的模长，平行四边形面积
     if(lw > leng_wid)
     {
       leng_wid = lw;
@@ -820,7 +827,7 @@ int Preprocess::plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, ui
   }
 
 
-  if((two_dis*two_dis/leng_wid) < p2l_ratio) // 判断比例，返回0
+  if((two_dis*two_dis/leng_wid) < p2l_ratio) //?? 最大距离平方和的乘积与最大平行四边形面积比，判断比例，返回0
   {
     curr_direct.setZero();
     return 0;
@@ -840,7 +847,7 @@ int Preprocess::plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, ui
     }
   }
 
-  if(disarr[disarr.size()-2] < 1e-16)
+  if(disarr[disarr.size()-2] < 1e-16) //第二小的点间距
   {
     curr_direct.setZero();
     return 0;
@@ -859,7 +866,7 @@ int Preprocess::plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, ui
   }
   else
   {
-    double dismax_min = disarr[0] / disarr[disarrsize-2];
+    double dismax_min = disarr[0] / disarr[disarrsize-2]; //最大最小间距比
     if(dismax_min >= limit_maxmin)
     {
       curr_direct.setZero();
@@ -867,7 +874,7 @@ int Preprocess::plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, ui
     }
   }
   
-  curr_direct << vx, vy, vz;
+  curr_direct << vx, vy, vz;// vx,vy,vz为局部范围最后一个点与第一个点的坐标差值，即向量（i_cur --> i_nex)
   curr_direct.normalize();
   return 1;
 }
