@@ -11,18 +11,18 @@ typedef pcl::PointXYZINormal PointType;
 typedef pcl::PointCloud<PointType> PointCloudXYZI;
 
 enum LID_TYPE{AVIA = 1, VELO16, OUST64}; //{1, 2, 3}
-enum Feature{Nor, Poss_Plane, Real_Plane, Edge_Jump, Edge_Plane, Wire, ZeroPoint};
+enum Feature{Nor, Poss_Plane, Real_Plane, Edge_Jump, Edge_Plane, Wire, ZeroPoint};//未判断，可能平面，平面，跳跃边，平面交接边,细线
 enum Surround{Prev, Next};
-enum E_jump{Nr_nor, Nr_zero, Nr_180, Nr_inf, Nr_blind};
+enum E_jump{Nr_nor, Nr_zero, Nr_180, Nr_inf, Nr_blind}; // 未判断，接近0度，接近180度，接近远端，接近近端
 
 //用于记录每个点的距离、角度、特征种类等属性
 struct orgtype
 {
   double range; //平面距离
-  double dista; //与后一个点的间距
-  double angle[2];
-  double intersect;
-  E_jump edj[2]; // edge_jump
+  double dista; //与后一个点的间距平方
+  double angle[2]; // cos(当前点指向前一点或后一点的向量, ray)
+  double intersect;// // 当前点与相邻两点的夹角cos值
+  E_jump edj[2]; // 点前后两个方向的edge_jump类型
   Feature ftype;
   orgtype()
   {

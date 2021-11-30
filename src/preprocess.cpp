@@ -461,7 +461,7 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
   int last_state = 0;
   int plane_type;
 
-    //第一个大于blind范围的点索引开始遍历
+    //第一个大于blind范围的点索引开始遍历,判断平面特征
   for(uint i=head; i<plsize2; i++)
   {
     if(types[i].range < blind) // blind范围内直接跳过
@@ -566,9 +566,10 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
   }
 
   plsize2 = plsize > 3 ? plsize - 3 : 0;
-  for(uint i=head+3; i<plsize2; i++) // 从head+3向后遍历
+    // 从head+3向后遍历，判断非平面点是不是edge，以及判断edge的类型
+  for(uint i=head+3; i<plsize2; i++)
   {
-    if(types[i].range<blind || types[i].ftype>=Real_Plane) // 距离太近或这已经判断为edge
+    if(types[i].range<blind || types[i].ftype>=Real_Plane) // 距离太近或这已经判断为edge或者平面
     {
       continue;
     }
@@ -579,9 +580,9 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
     }
 
     Eigen::Vector3d vec_a(pl[i].x, pl[i].y, pl[i].z); // sensor到当前点ray
-    Eigen::Vector3d vecs[2];
+    Eigen::Vector3d vecs[2]; //从当前点指向前后相邻点的两个向量
 
-    for(int j=0; j<2; j++)
+    for(int j=0; j<2; j++) // 计算当前点与前一点、后一点的向量，判断当前点前后两个方向的edge属性
     {
       int m = -1;
       if(j == 1)
@@ -591,32 +592,33 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
 
       if(types[i+m].range < blind) //索引i的前一个点（m = -1) 或者后一个点（m = 1) ，距离很小
       {
-        if(types[i].range > inf_bound) // > 10
+        if(types[i].range > inf_bound) // 根据当前点平面距离，判断edge jump属性
         {
-          types[i].edj[j] = Nr_inf;
+          types[i].edj[j] = Nr_inf; //靠近远端
         }
         else
         {
-          types[i].edj[j] = Nr_blind;
+          types[i].edj[j] = Nr_blind; // 靠近近端
         }
         continue;
       }
 
-      vecs[j] = Eigen::Vector3d(pl[i+m].x, pl[i+m].y, pl[i+m].z);
-      vecs[j] = vecs[j] - vec_a;
+      vecs[j] = Eigen::Vector3d(pl[i+m].x, pl[i+m].y, pl[i+m].z); // sensor指向 当前点的前一点或后一点的向量
+      vecs[j] = vecs[j] - vec_a; // 当前点指向前一点或后一点的向量
       
-      types[i].angle[j] = vec_a.dot(vecs[j]) / vec_a.norm() / vecs[j].norm();
-      if(types[i].angle[j] < jump_up_limit)
+      types[i].angle[j] = vec_a.dot(vecs[j]) / vec_a.norm() / vecs[j].norm(); // cos(当前点指向前一点或后一点的向量, ray)
+      if(types[i].angle[j] < jump_up_limit) //jump_up_limit 默认cos170度
       {
-        types[i].edj[j] = Nr_180;
+        types[i].edj[j] = Nr_180; //ray 与 当前点指向端点外一点的向量 夹角接近180度
       }
-      else if(types[i].angle[j] > jump_down_limit)
+      else if(types[i].angle[j] > jump_down_limit) //jump_down_limit 默认8度
       {
-        types[i].edj[j] = Nr_zero;
+        types[i].edj[j] = Nr_zero;//ray 与 当前点指向端点外一点的向量 夹角接近0度
       }
     }
 
-    types[i].intersect = vecs[Prev].dot(vecs[Next]) / vecs[Prev].norm() / vecs[Next].norm();
+    types[i].intersect = vecs[Prev].dot(vecs[Next]) / vecs[Prev].norm() / vecs[Next].norm(); // 当前点与相邻两点的夹角cos值
+    //根据 前端点edge jump类型，后端点edge jump类型，与后一点间距，与前一点间距的4倍，判断edge的类型
     if(types[i].edj[Prev]==Nr_nor && types[i].edj[Next]==Nr_zero && types[i].dista>0.0225 && types[i].dista>4*types[i-1].dista)
     {
       if(types[i].intersect > cos160)
@@ -662,8 +664,8 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
   }
 
   plsize2 = plsize-1;
-  double ratio;
-  for(uint i=head+1; i<plsize2; i++)
+  double ratio;//点的前后间距比，大：小
+  for(uint i=head+1; i<plsize2; i++)//对为分类点，判断特征类型
   {
     if(types[i].range<blind || types[i-1].range<blind || types[i+1].range<blind)
     {
@@ -686,7 +688,9 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
         ratio = types[i].dista / types[i-1].dista;
       }
 
-      if(types[i].intersect<smallp_intersect && ratio < smallp_ratio)
+      //smallp_intersect：默认172.5度余弦值
+      //smallp_intersect：默认1.2
+      if(types[i].intersect<smallp_intersect && ratio < smallp_ratio)//前后夹角大、间距接近，认为是真平面
       {
         if(types[i-1].ftype == Nor)
         {
@@ -701,7 +705,8 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
     }
   }
 
-  int last_surface = -1;
+  int last_surface = -1;//用于记录上一面特征的索引
+  //从头遍历，
   for(uint j=head; j<plsize; j++)
   {
     if(types[j].ftype==Poss_Plane || types[j].ftype==Real_Plane)
@@ -711,7 +716,7 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
         last_surface = j;
       }
     
-      if(j == uint(last_surface+point_filter_num-1))
+      if(j == uint(last_surface+point_filter_num-1))//按索引间距取平面点索引
       {
         PointType ap;
         ap.x = pl[j].x;
@@ -719,7 +724,7 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
         ap.z = pl[j].z;
         ap.intensity = pl[j].intensity;
         ap.curvature = pl[j].curvature;
-        pl_surf.push_back(ap);
+        pl_surf.push_back(ap);//记录
 
         last_surface = -1;
       }
@@ -728,10 +733,12 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
     {
       if(types[j].ftype==Edge_Jump || types[j].ftype==Edge_Plane)
       {
-        pl_corn.push_back(pl[j]);
+        pl_corn.push_back(pl[j]);//记录edge特征
       }
       if(last_surface != -1)
       {
+          //edge特征和上一个surface特征之间取所有点均值，作为面特征
+          //todo 检查超限
         PointType ap;
         for(uint k=last_surface; k<j; k++)
         {
@@ -895,10 +902,12 @@ bool Preprocess::edge_jump_judge(const PointCloudXYZI &pl, vector<orgtype> &type
       return false;
     }
   }
+  // d1,d2为向前或向后的相邻点间距，通过nor_dir控制方向
   double d1 = types[i+nor_dir-1].dista;
   double d2 = types[i+3*nor_dir-2].dista;
   double d;
 
+  //d1为较大间距
   if(d1<d2)
   {
     d = d1;
@@ -909,7 +918,7 @@ bool Preprocess::edge_jump_judge(const PointCloudXYZI &pl, vector<orgtype> &type
   d1 = sqrt(d1);
   d2 = sqrt(d2);
 
- 
+ //间距大于edgea（2）倍 或 间距差大于edgeb（0.1）
   if(d1>edgea*d2 || (d1-d2)>edgeb)
   {
     return false;
