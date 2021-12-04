@@ -79,6 +79,7 @@ void Preprocess::avia_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg)
   pl_surf.reserve(plsize);
   pl_full.resize(plsize);
 
+  //清空缓存内的点云并预留足够空间
   for(int i=0; i<N_SCANS; i++)
   {
     pl_buff[i].clear();
@@ -89,6 +90,7 @@ void Preprocess::avia_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg)
   //特征提取
   if (feature_enabled)
   {
+      // 按照line划分点云
     for(uint i=1; i<plsize; i++)
     {
       if((msg->points[i].line < N_SCANS) && ((msg->points[i].tag & 0x30) == 0x10 || (msg->points[i].tag & 0x30) == 0x00))
@@ -100,7 +102,7 @@ void Preprocess::avia_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg)
         pl_full[i].curvature = msg->points[i].offset_time / float(1000000); //use curvature as time of each laser points
 
         bool is_new = false;
-        //初步筛选特征？
+        //与前一点间距太小则忽略该点，间距太小不利于特征提取
         if((abs(pl_full[i].x - pl_full[i-1].x) > 1e-7) 
             || (abs(pl_full[i].y - pl_full[i-1].y) > 1e-7)
             || (abs(pl_full[i].z - pl_full[i-1].z) > 1e-7))

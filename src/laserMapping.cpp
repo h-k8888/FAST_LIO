@@ -99,7 +99,7 @@ vector<BoxPointType> cub_needrm;
 vector<PointVector>  Nearest_Points; 
 vector<double>       extrinT(3, 0.0);
 vector<double>       extrinR(9, 0.0);
-deque<double>                     time_buffer;
+deque<double>                     time_buffer; // 记录lidar时间
 deque<PointCloudXYZI::Ptr>        lidar_buffer; //记录特征提取或间隔采样后的lidar（特征）数据
 deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
 
@@ -126,7 +126,7 @@ M3D Lidar_R_wrt_IMU(Eye3d);//R lidar to imu (imu = r * lidar + t)
 
 /*** EKF inputs and output ***/
 MeasureGroup Measures;
-esekfom::esekf<state_ikfom, 12, input_ikfom> kf;
+esekfom::esekf<state_ikfom, 12, input_ikfom> kf; // 状态，噪声维度，输入
 state_ikfom state_point;
 vect3 pos_lid;
 
@@ -296,7 +296,7 @@ void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
 }
 
 double timediff_lidar_wrt_imu = 0.0;
-bool   timediff_set_flg = false;
+bool   timediff_set_flg = false; // 标记是否已经进行了时间补偿
 void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg) 
 {
     mtx_buffer.lock();
@@ -317,7 +317,7 @@ void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg)
     if (time_sync_en && !timediff_set_flg && abs(last_timestamp_lidar - last_timestamp_imu) > 1 && !imu_buffer.empty())
     {
         timediff_set_flg = true;
-        timediff_lidar_wrt_imu = last_timestamp_lidar + 0.1 - last_timestamp_imu;
+        timediff_lidar_wrt_imu = last_timestamp_lidar + 0.1 - last_timestamp_imu; //????
         printf("Self sync IMU and LiDAR, time diff is %.10lf \n", timediff_lidar_wrt_imu);
     }
 
@@ -339,8 +339,10 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
     // cout<<"IMU got at: "<<msg_in->header.stamp.toSec()<<endl;
     sensor_msgs::Imu::Ptr msg(new sensor_msgs::Imu(*msg_in));
 
+    // lidar 和 imu时间差过大，且开启 时间同步, 纠正当前输入imu的时间
     if (abs(timediff_lidar_wrt_imu) > 0.1 && time_sync_en)
     {
+        // 对输入imu时间，纠正为 时间差 + 原始时间
         msg->header.stamp = \
         ros::Time().fromSec(timediff_lidar_wrt_imu + msg_in->header.stamp.toSec());
     }
@@ -373,22 +375,24 @@ bool sync_packages(MeasureGroup &meas)
     /*** push a lidar scan ***/
     if(!lidar_pushed)
     {
-        meas.lidar = lidar_buffer.front();
-        meas.lidar_beg_time = time_buffer.front();
-        if (meas.lidar->points.size() <= 1) // time too little
+        meas.lidar = lidar_buffer.front(); // lidar指针指向最旧的lidar数据
+        meas.lidar_beg_time = time_buffer.front(); //记录最早时间
+
+        //更新结束时刻的时间
+        if (meas.lidar->points.size() <= 1) // time too little 时间太短，点数不足
         {
-            lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
+            lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime; // 记录lidar结束时间为 起始时间 + 单帧扫描时间
             ROS_WARN("Too few input point cloud!\n");
         }
-        else if (meas.lidar->points.back().curvature / double(1000) < 0.5 * lidar_mean_scantime)
+        else if (meas.lidar->points.back().curvature / double(1000) < 0.5 * lidar_mean_scantime) //最后一个点的时间 小于 单帧扫描时间的一半
         {
-            lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
+            lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;// 记录lidar结束时间为 起始时间 + 单帧扫描时间
         }
         else
         {
             scan_num ++;
-            lidar_end_time = meas.lidar_beg_time + meas.lidar->points.back().curvature / double(1000);
-            // 更新每帧lidar数据平均扫描时间
+            lidar_end_time = meas.lidar_beg_time + meas.lidar->points.back().curvature / double(1000); //结束时间设置为 起始时间 + 最后一个点的时间（相对）
+            // 动态更新每帧lidar数据平均扫描时间
             lidar_mean_scantime += (meas.lidar->points.back().curvature / double(1000) - lidar_mean_scantime) / scan_num;
         }
 
@@ -403,9 +407,9 @@ bool sync_packages(MeasureGroup &meas)
     }
 
     /*** push imu data, and pop from imu buffer ***/
-    double imu_time = imu_buffer.front()->header.stamp.toSec();
+    double imu_time = imu_buffer.front()->header.stamp.toSec(); // 最旧IMU时间
     meas.imu.clear();
-    while ((!imu_buffer.empty()) && (imu_time < lidar_end_time))//imu时间必须大于等于lidar时间
+    while ((!imu_buffer.empty()) && (imu_time < lidar_end_time))//记录imu数据，imu时间小于当前帧lidar结束时间
     {
         imu_time = imu_buffer.front()->header.stamp.toSec();
         if(imu_time > lidar_end_time) break;
@@ -815,7 +819,7 @@ int main(int argc, char** argv)
     Lidar_R_wrt_IMU<<MAT_FROM_ARRAY(extrinR);
     p_imu->set_extrinsic(Lidar_T_wrt_IMU, Lidar_R_wrt_IMU);
     p_imu->set_gyr_cov(V3D(gyr_cov, gyr_cov, gyr_cov));
-    p_imu->set_acc_cov(V3D(acc_cov, acc_cov, acc_cov));
+    p_imu->set_acc_cov(V3D(acc_cov, acc_cov, acc_cov)); // 加速度协方差
     p_imu->set_gyr_bias_cov(V3D(b_gyr_cov, b_gyr_cov, b_gyr_cov));
     p_imu->set_acc_bias_cov(V3D(b_acc_cov, b_acc_cov, b_acc_cov));
 
@@ -864,13 +868,14 @@ int main(int argc, char** argv)
         if (flg_exit) break;
         ros::spinOnce();
 
-        /// sync_packages(Measures)在Measure内储存当前lidar数据及lidar扫描时间内对应的imu数据序列
+        /// 在Measure内，储存当前lidar数据及lidar扫描时间内对应的imu数据序列
         if(sync_packages(Measures))
         {
+            //第一帧lidar数据
             if (flg_first_scan)
             {
-                first_lidar_time = Measures.lidar_beg_time;
-                p_imu->first_lidar_time = first_lidar_time;
+                first_lidar_time = Measures.lidar_beg_time; //记录第一帧绝对时间
+                p_imu->first_lidar_time = first_lidar_time; //记录第一帧绝对时间
                 flg_first_scan = false;
                 continue;
             }

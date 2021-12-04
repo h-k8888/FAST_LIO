@@ -102,6 +102,7 @@ struct dyn_runtime_share_datastruct
 	Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> R;
 };
 
+//状态量，噪声，输入状态量
 template<typename state, int process_noise_dof, typename input = state, typename measurement=state, int measurement_noise_dof=0>
 class esekf{
 
