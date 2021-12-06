@@ -889,6 +889,7 @@ int main(int argc, char** argv)
             svd_time   = 0;
             t0 = omp_get_wtime();
 
+            //根据imu数据序列和lidar数据，向前传播纠正点云的畸变
             p_imu->Process(Measures, kf, feats_undistort);
             state_point = kf.get_x();// 前向传播后body的状态预测值
             pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I; // global系 lidar位置

@@ -17,7 +17,7 @@ MTK_BUILD_MANIFOLD(state_ikfom,
 ((vect3, vel))
 ((vect3, bg))
 ((vect3, ba))
-((S2, grav)) //S2流形
+((S2, grav)) //S2流形,grav为负值
 );
 
 MTK_BUILD_MANIFOLD(input_ikfom,
