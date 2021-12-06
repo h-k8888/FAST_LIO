@@ -95,7 +95,7 @@ bool   lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
 bool   scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
 
 vector<vector<int>>  pointSearchInd_surf; 
-vector<BoxPointType> cub_needrm;
+vector<BoxPointType> cub_needrm;  //ikd-tree中，地图需要移除的包围盒序列
 vector<PointVector>  Nearest_Points; 
 vector<double>       extrinT(3, 0.0);
 vector<double>       extrinR(9, 0.0);
@@ -105,15 +105,15 @@ deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
 
 PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
-PointCloudXYZI::Ptr feats_down_body(new PointCloudXYZI());
-PointCloudXYZI::Ptr feats_down_world(new PointCloudXYZI());
-PointCloudXYZI::Ptr normvec(new PointCloudXYZI(100000, 1));
+PointCloudXYZI::Ptr feats_down_body(new PointCloudXYZI()); //畸变纠正后降采样的单帧点云，lidar系
+PointCloudXYZI::Ptr feats_down_world(new PointCloudXYZI());//畸变纠正后降采样的单帧点云，w系
+PointCloudXYZI::Ptr normvec(new PointCloudXYZI(100000, 1)); //特征点在地图中对应点的，局部平面参数,w系
 PointCloudXYZI::Ptr laserCloudOri(new PointCloudXYZI(100000, 1));
-PointCloudXYZI::Ptr corr_normvect(new PointCloudXYZI(100000, 1));
-PointCloudXYZI::Ptr _featsArray;
+PointCloudXYZI::Ptr corr_normvect(new PointCloudXYZI(100000, 1)); //对应点法相量？
+PointCloudXYZI::Ptr _featsArray; //ikd-tree中，map需要移除的点云
 
-pcl::VoxelGrid<PointType> downSizeFilterSurf; //表面降采样仍使voxel grid?
-pcl::VoxelGrid<PointType> downSizeFilterMap;
+pcl::VoxelGrid<PointType> downSizeFilterSurf; //单帧内降采样使用voxel grid
+pcl::VoxelGrid<PointType> downSizeFilterMap; //未使用
 
 KD_TREE ikdtree;
 
@@ -128,7 +128,7 @@ M3D Lidar_R_wrt_IMU(Eye3d);//R lidar to imu (imu = r * lidar + t)
 MeasureGroup Measures;
 esekfom::esekf<state_ikfom, 12, input_ikfom> kf; // 状态，噪声维度，输入
 state_ikfom state_point;
-vect3 pos_lid;
+vect3 pos_lid; // world系下lidar坐标
 
 nav_msgs::Path path;
 nav_msgs::Odometry odomAftMapped;
@@ -172,10 +172,11 @@ void pointBodyToWorld_ikfom(PointType const * const pi, PointType * const po, st
     po->intensity = pi->intensity;
 }
 
-//按当前body(imu)的状态，将局部点转换到世界系下
+//按当前body(lidar)的状态，将局部点转换到世界系下
 void pointBodyToWorld(PointType const * const pi, PointType * const po)
 {
     V3D p_body(pi->x, pi->y, pi->z);
+    //world <-- imu <-- lidar
     V3D p_global(state_point.rot * (state_point.offset_R_L_I*p_body + state_point.offset_T_L_I) + state_point.pos);
 
     po->x = p_global(0);
@@ -224,15 +225,18 @@ void points_cache_collect()
     for (int i = 0; i < points_history.size(); i++) _featsArray->push_back(points_history[i]);
 }
 
-BoxPointType LocalMap_Points;
+//根据lidar的FoV分割场景
+BoxPointType LocalMap_Points; // ikd-tree中,局部地图的包围盒角点
 bool Localmap_Initialized = false;
 void lasermap_fov_segment()
 {
-    cub_needrm.clear();
+    cub_needrm.clear(); // 清空需要移除的区域
     kdtree_delete_counter = 0;
     kdtree_delete_time = 0.0;    
-    pointBodyToWorld(XAxisPoint_body, XAxisPoint_world);
+    pointBodyToWorld(XAxisPoint_body, XAxisPoint_world); // X轴分界点转换到w系下
     V3D pos_LiD = pos_lid; // global系lidar位置
+
+    //初始化局部地图包围盒角点，以为w系下lidar位置为中心
     if (!Localmap_Initialized){
         for (int i = 0; i < 3; i++){
             LocalMap_Points.vertex_min[i] = pos_LiD(i) - cube_len / 2.0;
@@ -241,25 +245,33 @@ void lasermap_fov_segment()
         Localmap_Initialized = true;
         return;
     }
-    float dist_to_map_edge[3][2];
+
+    float dist_to_map_edge[3][2]; //各个方向与局部地图边界的距离
     bool need_move = false;
     for (int i = 0; i < 3; i++){
         dist_to_map_edge[i][0] = fabs(pos_LiD(i) - LocalMap_Points.vertex_min[i]);
         dist_to_map_edge[i][1] = fabs(pos_LiD(i) - LocalMap_Points.vertex_max[i]);
+
+        //与某个方向上的边界距离太小，标记需要移除need_move
         if (dist_to_map_edge[i][0] <= MOV_THRESHOLD * DET_RANGE || dist_to_map_edge[i][1] <= MOV_THRESHOLD * DET_RANGE) need_move = true;
     }
+
+    //不需要移除则直接返回
     if (!need_move) return;
+
     BoxPointType New_LocalMap_Points, tmp_boxpoints;
-    New_LocalMap_Points = LocalMap_Points;
+    New_LocalMap_Points = LocalMap_Points; // 新的局部地图角点
     float mov_dist = max((cube_len - 2.0 * MOV_THRESHOLD * DET_RANGE) * 0.5 * 0.9, double(DET_RANGE * (MOV_THRESHOLD -1)));
     for (int i = 0; i < 3; i++){
         tmp_boxpoints = LocalMap_Points;
+        //与包围盒最小值角点距离
         if (dist_to_map_edge[i][0] <= MOV_THRESHOLD * DET_RANGE){
             New_LocalMap_Points.vertex_max[i] -= mov_dist;
             New_LocalMap_Points.vertex_min[i] -= mov_dist;
             tmp_boxpoints.vertex_min[i] = LocalMap_Points.vertex_max[i] - mov_dist;
-            cub_needrm.push_back(tmp_boxpoints);
-        } else if (dist_to_map_edge[i][1] <= MOV_THRESHOLD * DET_RANGE){
+            cub_needrm.push_back(tmp_boxpoints); // 移除较远包围盒
+        }
+        else if (dist_to_map_edge[i][1] <= MOV_THRESHOLD * DET_RANGE){
             New_LocalMap_Points.vertex_max[i] += mov_dist;
             New_LocalMap_Points.vertex_min[i] += mov_dist;
             tmp_boxpoints.vertex_max[i] = LocalMap_Points.vertex_min[i] + mov_dist;
@@ -270,7 +282,8 @@ void lasermap_fov_segment()
 
     points_cache_collect();
     double delete_begin = omp_get_wtime();
-    if(cub_needrm.size() > 0) kdtree_delete_counter = ikdtree.Delete_Point_Boxes(cub_needrm);
+    if(cub_needrm.size() > 0)
+        kdtree_delete_counter = ikdtree.Delete_Point_Boxes(cub_needrm);
     kdtree_delete_time = omp_get_wtime() - delete_begin;
 }
 
@@ -426,10 +439,12 @@ bool sync_packages(MeasureGroup &meas)
 int process_increments = 0;
 void map_incremental()
 {
-    PointVector PointToAdd;
-    PointVector PointNoNeedDownsample;
+    PointVector PointToAdd; //需要加入到ikd-tree中的点云
+    PointVector PointNoNeedDownsample; //加入ikd-tree时，不需要降采样的点云
     PointToAdd.reserve(feats_down_size);
     PointNoNeedDownsample.reserve(feats_down_size);
+
+    //根据点与所在包围盒中心点的距离，分类是否需要降采样
     for (int i = 0; i < feats_down_size; i++)
     {
         /* transform to world frame */
@@ -444,15 +459,19 @@ void map_incremental()
             mid_point.x = floor(feats_down_world->points[i].x/filter_size_map_min)*filter_size_map_min + 0.5 * filter_size_map_min;
             mid_point.y = floor(feats_down_world->points[i].y/filter_size_map_min)*filter_size_map_min + 0.5 * filter_size_map_min;
             mid_point.z = floor(feats_down_world->points[i].z/filter_size_map_min)*filter_size_map_min + 0.5 * filter_size_map_min;
-            float dist  = calc_dist(feats_down_world->points[i],mid_point);
+            float dist  = calc_dist(feats_down_world->points[i],mid_point);//当前点与box中心的距离
+
+            //判断最近点在x、y、z三个方向上，与中心的距离，判断是否加入时需要降采样
             if (fabs(points_near[0].x - mid_point.x) > 0.5 * filter_size_map_min && fabs(points_near[0].y - mid_point.y) > 0.5 * filter_size_map_min && fabs(points_near[0].z - mid_point.z) > 0.5 * filter_size_map_min){
-                PointNoNeedDownsample.push_back(feats_down_world->points[i]);
+                PointNoNeedDownsample.push_back(feats_down_world->points[i]);//若三个方向距离都大于地图珊格半轴长，无需降采样
                 continue;
             }
+
+            //判断当前点的 NUM_MATCH_POINTS 个邻近点与包围盒中心的范围
             for (int readd_i = 0; readd_i < NUM_MATCH_POINTS; readd_i ++)
             {
                 if (points_near.size() < NUM_MATCH_POINTS) break;
-                if (calc_dist(points_near[readd_i], mid_point) < dist)
+                if (calc_dist(points_near[readd_i], mid_point) < dist) // 如果邻近点到中心的距离 小于 当前点到中心的距离，则不需要添加当前点
                 {
                     need_add = false;
                     break;
@@ -467,8 +486,8 @@ void map_incremental()
     }
 
     double st_time = omp_get_wtime();
-    add_point_size = ikdtree.Add_Points(PointToAdd, true);
-    ikdtree.Add_Points(PointNoNeedDownsample, false); 
+    add_point_size = ikdtree.Add_Points(PointToAdd, true);//加入点时需要降采样
+    ikdtree.Add_Points(PointNoNeedDownsample, false); //加入点时不需要降采样
     add_point_size = PointToAdd.size() + PointNoNeedDownsample.size();
     kdtree_incremental_time = omp_get_wtime() - st_time;
 }
@@ -635,11 +654,12 @@ void publish_path(const ros::Publisher pubPath)
     }
 }
 
+//构造H矩阵
 void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data)
 {
     double match_start = omp_get_wtime();
     laserCloudOri->clear(); 
-    corr_normvect->clear(); 
+    corr_normvect->clear();
     total_residual = 0.0; 
 
     /** closest surface search and residual computation **/
@@ -647,14 +667,14 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
         omp_set_num_threads(MP_PROC_NUM);
         #pragma omp parallel for
     #endif
-    for (int i = 0; i < feats_down_size; i++)
+    for (int i = 0; i < feats_down_size; i++) //判断每个点的对应邻域是否符合平面点的假设
     {
-        PointType &point_body  = feats_down_body->points[i]; 
+        PointType &point_body  = feats_down_body->points[i]; //lidar系下坐标
         PointType &point_world = feats_down_world->points[i]; //lidar数据点在world系下坐标
 
         /* transform to world frame */
-        V3D p_body(point_body.x, point_body.y, point_body.z);
-        V3D p_global(s.rot * (s.offset_R_L_I*p_body + s.offset_T_L_I) + s.pos);
+        V3D p_body(point_body.x, point_body.y, point_body.z); //lidar系下坐标
+        V3D p_global(s.rot * (s.offset_R_L_I*p_body + s.offset_T_L_I) + s.pos); //w系下坐标
         point_world.x = p_global(0);
         point_world.y = p_global(1);
         point_world.z = p_global(2);
@@ -677,11 +697,13 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
         if (!point_selected_surf[i]) continue;
 
         VF(4) pabcd;
-        point_selected_surf[i] = false;
+        point_selected_surf[i] = false; //二次筛选平面点
+        //拟合局部平面，返回：是否有内点大于距离阈值
         if (esti_plane(pabcd, points_near, 0.1f))
         {
+            //plane distance
             float pd2 = pabcd(0) * point_world.x + pabcd(1) * point_world.y + pabcd(2) * point_world.z + pabcd(3);
-            float s = 1 - 0.9 * fabs(pd2) / sqrt(p_body.norm());
+            float s = 1 - 0.9 * fabs(pd2) / sqrt(p_body.norm()); //筛选条件 1 - 0.9 * （点到平面距离 / 点到lidar原点距离）
 
             if (s > 0.9)
             {
@@ -690,12 +712,12 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
                 normvec->points[i].y = pabcd(1);
                 normvec->points[i].z = pabcd(2);
                 normvec->points[i].intensity = pd2;
-                res_last[i] = abs(pd2);// 残差，距离平方
+                res_last[i] = abs(pd2);// 残差，距离
             }
         }
     }
     
-    effct_feat_num = 0;
+    effct_feat_num = 0;//有效匹配点数
 
     for (int i = 0; i < feats_down_size; i++)
     {
@@ -703,7 +725,7 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
         {
             laserCloudOri->points[effct_feat_num] = feats_down_body->points[i];//body系 平面特征点
             corr_normvect->points[effct_feat_num] = normvec->points[i];//world系 平面参数
-            total_residual += res_last[i];// 残差和 （平方和）
+            total_residual += res_last[i];// 残差和
             effct_feat_num ++;
         }
     }
@@ -715,31 +737,32 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
         return;
     }
 
-    res_mean_last = total_residual / effct_feat_num;// 残差均值 （距离平方）
+    res_mean_last = total_residual / effct_feat_num;// 残差均值 （距离）
     match_time  += omp_get_wtime() - match_start;
     double solve_start_  = omp_get_wtime();
     
     /*** Computation of Measuremnt Jacobian matrix H and measurents vector ***/
     ekfom_data.h_x = MatrixXd::Zero(effct_feat_num, 12); //定义H维度
-    ekfom_data.h.resize(effct_feat_num);
+    ekfom_data.h.resize(effct_feat_num);//有效方程个数
 
     for (int i = 0; i < effct_feat_num; i++)
     {
-        const PointType &laser_p  = laserCloudOri->points[i];
+        const PointType &laser_p  = laserCloudOri->points[i]; //lidar系 平面特征点
         V3D point_this_be(laser_p.x, laser_p.y, laser_p.z);
         M3D point_be_crossmat;
         point_be_crossmat << SKEW_SYM_MATRX(point_this_be);
         V3D point_this = s.offset_R_L_I * point_this_be + s.offset_T_L_I;// 当前状态imu系下 点坐标
         M3D point_crossmat;
-        point_crossmat<<SKEW_SYM_MATRX(point_this);
+        point_crossmat<<SKEW_SYM_MATRX(point_this);// 当前状态imu系下 点坐标反对称矩阵
 
         /*** get the normal vector of closest surface/corner ***/
         const PointType &norm_p = corr_normvect->points[i];
-        V3D norm_vec(norm_p.x, norm_p.y, norm_p.z);
+        V3D norm_vec(norm_p.x, norm_p.y, norm_p.z);//对应局部法相量
 
         /*** calculate the Measuremnt Jacobian matrix H ***/
-        V3D C(s.rot.conjugate() *norm_vec);
+        V3D C(s.rot.conjugate() *norm_vec); // 将法相量旋转到imu系下
         V3D A(point_crossmat * C);
+        //添加数据到矩阵
         if (extrinsic_est_en)
         {
             V3D B(point_be_crossmat * s.offset_R_L_I.conjugate() * C); //s.rot.conjugate()*norm_vec);
@@ -889,7 +912,8 @@ int main(int argc, char** argv)
             svd_time   = 0;
             t0 = omp_get_wtime();
 
-            //根据imu数据序列和lidar数据，向前传播纠正点云的畸变
+            //根据imu数据序列和lidar数据，向前传播纠正点云的畸变, 此前已经完成间隔采样或特征提取
+            // feats_undistort 为畸变纠正之后的点云,lidar系
             p_imu->Process(Measures, kf, feats_undistort);
             state_point = kf.get_x();// 前向传播后body的状态预测值
             pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I; // global系 lidar位置
@@ -900,16 +924,17 @@ int main(int argc, char** argv)
                 continue;
             }
 
-            flg_EKF_inited = (Measures.lidar_beg_time - first_lidar_time) < INIT_TIME ? \
-                            false : true;
+            // 检查当前lidar数据时间，与最早lidar数据时间是否足够
+            flg_EKF_inited = (Measures.lidar_beg_time - first_lidar_time) < INIT_TIME ? false : true;
             /*** Segment the map in lidar FOV ***/
-            lasermap_fov_segment();
+            lasermap_fov_segment();// 根据lidar在W系下的位置，重新确定局部地图的包围盒角点，移除远端的点
 
             /*** downsample the feature points in a scan ***/
             downSizeFilterSurf.setInputCloud(feats_undistort);
             downSizeFilterSurf.filter(*feats_down_body);
             t1 = omp_get_wtime();
-            feats_down_size = feats_down_body->points.size();
+            feats_down_size = feats_down_body->points.size(); //当前帧降采样后点数
+
             /*** initialize the map kdtree ***/
             if(ikdtree.Root_Node == nullptr)
             {
@@ -921,7 +946,7 @@ int main(int argc, char** argv)
                     {
                         pointBodyToWorld(&(feats_down_body->points[i]), &(feats_down_world->points[i]));//point转到world系下
                     }
-                    // world系下对当前帧降采样后的点建立lkd-tree
+                    // world系下对当前帧降采样后的点云，初始化lkd-tree
                     ikdtree.Build(feats_down_world->points);
                 }
                 continue;
@@ -964,12 +989,11 @@ int main(int argc, char** argv)
             /*** iterated state estimation ***/
             double t_update_start = omp_get_wtime();
             double solve_H_time = 0;
-            //todo pcl icp
             kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
             state_point = kf.get_x();
             euler_cur = SO3ToEuler(state_point.rot);
             pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;// world系下lidar坐标
-            geoQuat.x = state_point.rot.coeffs()[0];// world系下当前body（imu）的姿态四元数
+            geoQuat.x = state_point.rot.coeffs()[0];// world系下当前imu的姿态四元数
             geoQuat.y = state_point.rot.coeffs()[1];
             geoQuat.z = state_point.rot.coeffs()[2];
             geoQuat.w = state_point.rot.coeffs()[3];
