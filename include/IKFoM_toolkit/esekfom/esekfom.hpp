@@ -379,7 +379,7 @@ public:
 		P_ = xp * P_ * xp.transpose() + (f_w1 * dt) * Q * (f_w1 * dt).transpose();
 	#else
 		F_x1 += f_x_final * dt;
-		P_ = (F_x1) * P_ * (F_x1).transpose() + (dt * f_w_final) * Q * (dt * f_w_final).transpose();
+		P_ = (F_x1) * P_ * (F_x1).transpose() + (dt * f_w_final) * Q * (dt * f_w_final).transpose();//更新协方差矩阵
 	#endif
 	}
 
