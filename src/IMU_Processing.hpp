@@ -64,10 +64,13 @@ class ImuProcess
   void IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, int &N);
   void UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, PointCloudXYZI &pcl_in_out);
 
+  Pose6D Pose_IMU2LiDAR(const Pose6D &IMU_pose, const state_ikfom imu_state);
+
   PointCloudXYZI::Ptr cur_pcl_un_;
   sensor_msgs::ImuConstPtr last_imu_;
   deque<sensor_msgs::ImuConstPtr> v_imu_;
   vector<Pose6D> IMUpose; // //(时间，加速度，角速度，速度，位置，旋转矩阵）
+  vector<Pose6D> Lidarpose; // //(时间，加速度，角速度，速度，位置，旋转矩阵）
   vector<M3D>    v_rot_pcl_;
   M3D Lidar_R_wrt_IMU;
   V3D Lidar_T_wrt_IMU;
@@ -112,6 +115,7 @@ void ImuProcess::Reset()
   init_iter_num     = 1;
   v_imu_.clear();
   IMUpose.clear();
+  Lidarpose.clear();
   last_imu_.reset(new sensor_msgs::Imu());
   cur_pcl_un_.reset(new PointCloudXYZI());
 }
@@ -231,8 +235,15 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   /*** Initialize IMU pose ***/
   state_ikfom imu_state = kf_state.get_x();
   IMUpose.clear();
+  Lidarpose.clear();
   //设定初始时刻相对状态(相对于imu积分初始状态的时间，上一加速度，上一角速度，速度，位置，旋转矩阵）
   IMUpose.push_back(set_pose6d(0.0, acc_s_last, angvel_last, imu_state.vel, imu_state.pos, imu_state.rot.toRotationMatrix()));
+
+  vect3 pos_lid = imu_state.pos + imu_state.rot * imu_state.offset_T_L_I;// world系下lidar坐标
+  vect3 vec_lid = imu_state.vel + angvel_last.cross(pos_lid); //world系下lidar速度
+  SO3 rot_lid = imu_state.rot * imu_state.offset_R_L_I;//world系下lidar姿态
+  Lidarpose.push_back(set_pose6d(0.0, acc_s_last, angvel_last, vec_lid, pos_lid, rot_lid.toRotationMatrix()));
+
 
   /*** forward propagation at each imu point ***/
   V3D angvel_avr, acc_avr, acc_imu, vel_imu, pos_imu;
@@ -292,6 +303,11 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
     double &&offs_t = tail->header.stamp.toSec() - pcl_beg_time;//m+1时刻与lidar起始时刻时间差
     //保存帧内imu数据 m+1 时刻的pose、前一时刻与当前时刻imu数据的均值（w系）、v、p、r、
     IMUpose.push_back(set_pose6d(offs_t, acc_s_last, angvel_last, imu_state.vel, imu_state.pos, imu_state.rot.toRotationMatrix()));
+
+      vect3 pos_lid = imu_state.pos + imu_state.rot * imu_state.offset_T_L_I;// world系下lidar坐标
+      vect3 vec_lid = imu_state.vel + angvel_last.cross(pos_lid); //world系下lidar速度
+      SO3 rot_lid = imu_state.rot * imu_state.offset_R_L_I;//world系下lidar姿态
+      Lidarpose.push_back(set_pose6d(offs_t, acc_s_last, angvel_last, vec_lid, pos_lid, rot_lid.toRotationMatrix()));
   }
 
   /*** calculated the pos and attitude prediction at the frame-end ***/
@@ -303,9 +319,15 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   last_imu_ = meas.imu.back(); //记录最后一个imu数据为上一imu数据，用于下一次imu前向传播的开头
   last_lidar_end_time_ = pcl_end_time;//记录点云结束时间为上一帧结束时间
 
+  //todo lidar pose
+    vect3 pos_lid_e = imu_state.pos + imu_state.rot * imu_state.offset_T_L_I;// world系下lidar坐标
+//    vect3 vec_lid_e = imu_state.vel + angvel_last.cross(pos_lid); //world系下lidar速度
+    SO3 rot_lid_e = imu_state.rot * imu_state.offset_R_L_I;//world系下lidar姿态
+
+
   /*** undistort each lidar point (backward propagation) ***/
   auto it_pcl = pcl_out.points.end() - 1;//点云从后向前遍历（时间大到小），此前点云已经按照时间从小到大排序
-  for (auto it_kp = IMUpose.end() - 1; it_kp != IMUpose.begin(); it_kp--) //imu pose从后向前遍历
+  for (auto it_kp = Lidarpose.end() - 1; it_kp != Lidarpose.begin(); it_kp--) //imu pose从后向前遍历
   {
     auto head = it_kp - 1;// 前一imu位姿，j-1
     auto tail = it_kp;// 后一imu位姿，j
@@ -327,9 +349,9 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
        * Note: Compensation direction is INVERSE of Frame's moving direction
        * So if we want to compensate a point at timestamp-i to the frame-e
        * P_compensate = R_imu_e ^ T * (R_i * P_i + T_ei) where T_ei is represented in global frame */
-      M3D R_i(R_imu * Exp(angvel_avr, dt));//R(global <-- i)
+      M3D R_i(Exp(angvel_avr, dt));//R(global <-- i)
       // global <-- head <-- i
-      
+
       V3D P_i(it_pcl->x, it_pcl->y, it_pcl->z);//lidar系下索引i点的坐标
       //imu_state:lidar终点时刻与imu终点时刻较大者，imu位姿
       //Ti - Te
@@ -349,11 +371,20 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
        ***/
       V3D P_compensate = imu_state.offset_R_L_I.conjugate() * (imu_state.rot.conjugate() * \
       (R_i * (imu_state.offset_R_L_I * P_i + imu_state.offset_T_L_I) + T_ei) - imu_state.offset_T_L_I);// not accurate!
-      
+
+        V3D T_i(vel_imu * dt + 0.5 * acc_imu * dt * dt);//T(i <-- end)
+
+        // j - 1 <-- P_i
+        V3D P_head = (R_i * P_i + T_i);
+        // world <-- P_head
+        V3D P_w = R_imu * P_head + pos_imu;
+        // lidar_end <-- world
+        V3D P_e = rot_lid.conjugate() * (P_w - pos_lid_e);
+
       // save Undistorted points and their rotation
-      it_pcl->x = P_compensate(0);
-      it_pcl->y = P_compensate(1);
-      it_pcl->z = P_compensate(2);
+      it_pcl->x = P_e(0);
+      it_pcl->y = P_e(1);
+      it_pcl->z = P_e(2);
 
       if (it_pcl == pcl_out.points.begin()) break;
     }
@@ -404,4 +435,13 @@ void ImuProcess::Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 
   t3 = omp_get_wtime();
   
   // cout<<"[ IMU Process ]: Time: "<<t3 - t1<<endl;
+}
+
+Pose6D ImuProcess::Pose_IMU2LiDAR(const Pose6D &IMU_pose, const state_ikfom imu_state)
+{
+    Pose6D lidar_pose;
+    lidar_pose = IMU_pose;
+    imu_state.offset_T_L_I;
+
+    //(时间，加速度，角速度，速度，位置，旋转矩阵）
 }
