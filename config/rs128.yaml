@@ -16,7 +16,7 @@ preprocess:
     lidar_type: 4                # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR, 4 RS
     scan_line: 128
     scan_rate: 10                # only need to be set for velodyne, unit: Hz,
-    blind: 4
+    blind: 2
 
 mapping:
     acc_cov: 0.1
