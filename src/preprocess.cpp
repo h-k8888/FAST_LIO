@@ -942,6 +942,11 @@ void Preprocess::rs_handler(const sensor_msgs::PointCloud2_<allocator<void>>::Co
     pcl::fromROSMsg(*msg, pl_orig);
     int plsize = pl_orig.points.size();
     pl_surf.reserve(plsize);
+//    ROS_INFO("PLSIZE: %d", plsize);
+//
+//    if(pl_orig.points.back().time > 1000000)
+//        for(auto p : pl_orig.points)
+//            p.time = 0;
 
     /*** These variables only works when no point timestamps given ***/
     double omega_l = 0.361 * SCAN_RATE;       // scan angular velocity
