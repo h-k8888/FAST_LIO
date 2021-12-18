@@ -285,7 +285,7 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
     std::vector<float> time_last(N_SCANS, 0.0);  // last offset time
     /*****************************************************************/
 
-    if (pl_orig.points[plsize - 1].time > 0)//todo check pl_orig.points[plsize - 1].time
+    if (pl_orig.points[plsize - 1].time > 0)
     {
       given_offset_time = true;
     }
@@ -943,10 +943,10 @@ void Preprocess::rs_handler(const sensor_msgs::PointCloud2_<allocator<void>>::Co
     int plsize = pl_orig.points.size();
     pl_surf.reserve(plsize);
 //    ROS_INFO("PLSIZE: %d", plsize);
-//
-//    if(pl_orig.points.back().time > 1000000)
-//        for(auto p : pl_orig.points)
-//            p.time = 0;
+
+    if (pl_orig.points[plsize - 1].time > 1000000)
+        for (int i = 0; i < plsize; i++)
+            pl_orig.points[i].time = 0;
 
     /*** These variables only works when no point timestamps given ***/
     double omega_l = 0.361 * SCAN_RATE;       // scan angular velocity
@@ -1102,10 +1102,16 @@ void Preprocess::rs_handler(const sensor_msgs::PointCloud2_<allocator<void>>::Co
 
             if (i % point_filter_num == 0)
             {
-                if(added_pt.x*added_pt.x+added_pt.y*added_pt.y+added_pt.z*added_pt.z > (blind * blind))
-                {
-                    pl_surf.points.push_back(added_pt);
-                }
+                float dist2sensor = added_pt.x*added_pt.x+added_pt.y*added_pt.y+added_pt.z*added_pt.z;
+                if(added_pt.z < -2.5 || dist2sensor > 100 * 100 || dist2sensor <= blind * blind)
+                    continue;
+
+                pl_surf.points.push_back(added_pt);
+
+//                if(added_pt.x*added_pt.x+added_pt.y*added_pt.y+added_pt.z*added_pt.z > (blind * blind))
+//                {
+//                    pl_surf.points.push_back(added_pt);
+//                }
             }
         }
     }
