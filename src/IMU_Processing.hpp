@@ -242,7 +242,10 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   //lidar pose
   vect3 pos_lid = imu_state.pos + imu_state.rot * imu_state.offset_T_L_I;// world系下lidar坐标
   vect3 vec_lid = imu_state.vel + imu_state.rot * angvel_last.cross(imu_state.offset_T_L_I); //world系下lidar速度
-  SO3 rot_lid = imu_state.rot * imu_state.offset_R_L_I;//world系下lidar姿态
+//    vect3 vec_lid = imu_state.vel + (imu_state.rot * angvel_last).cross(imu_state.rot * imu_state.offset_T_L_I) ; //world系下lidar速度
+
+
+    SO3 rot_lid = imu_state.rot * imu_state.offset_R_L_I;//world系下lidar姿态
   Lidarpose.push_back(set_pose6d(0.0, acc_s_last, angvel_last, vec_lid, pos_lid, rot_lid.toRotationMatrix()));
 
   /*** forward propagation at each imu point ***/
@@ -309,6 +312,8 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
     //lidar pose
       vect3 pos_lid = imu_state.pos + imu_state.rot * imu_state.offset_T_L_I;// world系下lidar坐标
       vect3 vec_lid = imu_state.vel + imu_state.rot * angvel_last.cross(imu_state.offset_T_L_I); //world系下lidar速度
+//      vect3 vec_lid = imu_state.vel + (imu_state.rot * angvel_last).cross(imu_state.rot * imu_state.offset_T_L_I) ; //world系下lidar速度
+
       SO3 rot_lid = imu_state.rot * imu_state.offset_R_L_I;//world系下lidar姿态
       Lidarpose.push_back(set_pose6d(offs_t, acc_s_last, angvel_last, vec_lid, pos_lid, rot_lid.toRotationMatrix()));
   }
