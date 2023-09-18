@@ -102,7 +102,6 @@ struct dyn_runtime_share_datastruct
 	Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> R;
 };
 
-//状态量，噪声，输入状态量
 template<typename state, int process_noise_dof, typename input = state, typename measurement=state, int measurement_noise_dof=0>
 class esekf{
 
@@ -379,7 +378,7 @@ public:
 		P_ = xp * P_ * xp.transpose() + (f_w1 * dt) * Q * (f_w1 * dt).transpose();
 	#else
 		F_x1 += f_x_final * dt;
-		P_ = (F_x1) * P_ * (F_x1).transpose() + (dt * f_w_final) * Q * (dt * f_w_final).transpose();//更新协方差矩阵
+		P_ = (F_x1) * P_ * (F_x1).transpose() + (dt * f_w_final) * Q * (dt * f_w_final).transpose();
 	#endif
 	}
 
@@ -1634,7 +1633,7 @@ public:
 		for(int i=-1; i<maximum_iter; i++)
 		{
 			dyn_share.valid = true;	
-			h_dyn_share(x_, dyn_share); //计算残差
+			h_dyn_share(x_, dyn_share);
 
 			if(! dyn_share.valid)
 			{

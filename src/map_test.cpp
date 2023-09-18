@@ -146,6 +146,7 @@ geometry_msgs::PoseStamped msg_body_pose;
 shared_ptr<Preprocess> p_pre(new Preprocess());
 shared_ptr<ImuProcess> p_imu(new ImuProcess());
 
+
 void SigHandle(int sig)
 {
     flg_exit = true;
@@ -930,6 +931,30 @@ int main(int argc, char** argv)
             ("/path", 100000);
 //------------------------------------------------------------------------------------------------------
     signal(SIGINT, SigHandle);
+
+    double tm0 = omp_get_wtime();
+    PointCloudXYZI::Ptr map_cloud(new PointCloudXYZI());
+    pcl::PCDReader reader;
+    reader.read("/home/autolab/ws_fastio/src/FAST_LIO/PCD/scans.pcd", *map_cloud);
+//    pcl::PCDWriter pcd_writer;
+//    cout << "current scan saved to /PCD/" << file_name<<endl;
+//    pcd_writer.writeBinary(all_points_dir, *pcl_wait_save);
+    double tm2 = omp_get_wtime();
+    ROS_INFO("load PCD cost: %0.6fs.", tm2 - tm0);
+
+    ikdtree.set_downsample_param(filter_size_map_min);
+//    feats_down_world->resize(feats_down_size);
+//    for(int i = 0; i < feats_down_size; i++)
+//    {
+//        pointBodyToWorld(&(feats_down_body->points[i]), &(feats_down_world->points[i]));
+//    }
+    ikdtree.Build(map_cloud->points);
+    double tm3 = omp_get_wtime();
+    ROS_INFO("build ikd-tree cost: %0.6fs.", tm3 - tm2);
+    return 0;
+
+
+
     ros::Rate rate(5000);
     bool status = ros::ok();
     while (status)
