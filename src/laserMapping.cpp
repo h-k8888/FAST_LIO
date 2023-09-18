@@ -134,17 +134,23 @@ state_ikfom state_point;
 //Eigen::VectorXf body_keypose_last(6); //rpy xyz
 state_ikfom state_body_last;
 vect3 pos_lid;
-geometry_msgs::PoseStamped msg_lidar_pose;
+geometry_msgs::PoseStamped msg_target_pose;
 bool have_keyframe = false;
 
 nav_msgs::Path path;
-nav_msgs::Path path_lidar;
+nav_msgs::Path path_target;
 nav_msgs::Odometry odomAftMapped;
 geometry_msgs::Quaternion geoQuat;
 geometry_msgs::PoseStamped msg_body_pose;
 
 shared_ptr<Preprocess> p_pre(new Preprocess());
 shared_ptr<ImuProcess> p_imu(new ImuProcess());
+
+// for ground truth, target in IMU frame
+vector<double>       gt_extrinT(3, 0.0);
+vector<double>       gt_extrinR(9, 0.0);
+V3D gt_T_wrt_IMU(Zero3d);
+M3D gt_R_wrt_IMU(Eye3d);
 
 void SigHandle(int sig)
 {
@@ -646,18 +652,19 @@ void publish_path(const ros::Publisher pubPath)
 //        V3D euler_body = SO3ToEuler(state_point.rot);
 //        body_keypose_last << euler_body(0), euler_body(1), euler_body(2), state_point.pos(0), state_point.pos(1), state_point.pos(2);
         state_body_last = state_point;
-        vect3 pos_lidar;
-        pos_lidar = state_point.pos + state_point.rot * state_point.offset_T_L_I;
-        msg_lidar_pose.header.stamp = ros::Time().fromSec(lidar_end_time);
-        msg_lidar_pose.header.frame_id = "camera_init";
-        msg_lidar_pose.pose.position.x = pos_lidar(0);
-        msg_lidar_pose.pose.position.y = pos_lidar(1);
-        msg_lidar_pose.pose.position.z = pos_lidar(2);
-        msg_lidar_pose.pose.orientation.x = geoQuat.x;
-        msg_lidar_pose.pose.orientation.y = geoQuat.y;
-        msg_lidar_pose.pose.orientation.z = geoQuat.z;
-        msg_lidar_pose.pose.orientation.w = geoQuat.w;
-        path_lidar.poses.push_back(msg_lidar_pose);
+        vect3 pos_target;
+        pos_target = state_point.pos + state_point.rot * gt_T_wrt_IMU;
+        msg_target_pose.header.stamp = ros::Time().fromSec(lidar_end_time);
+        msg_target_pose.header.frame_id = "camera_init";
+        msg_target_pose.pose.position.x = pos_target(0);
+        msg_target_pose.pose.position.y = pos_target(1);
+        msg_target_pose.pose.position.z = pos_target(2);
+        Eigen::Quaterniond quat_target(state_point.rot * gt_R_wrt_IMU);
+        msg_target_pose.pose.orientation.x = quat_target.x();
+        msg_target_pose.pose.orientation.y = quat_target.y();
+        msg_target_pose.pose.orientation.z = quat_target.z();
+        msg_target_pose.pose.orientation.w = quat_target.w();
+        path_target.poses.push_back(msg_target_pose);
         have_keyframe = true;
         return;
     }
@@ -690,18 +697,19 @@ void publish_path(const ros::Publisher pubPath)
         sqrt(x*x + y*y + z*z) >= surroundingkeyframeAddingDistThreshold)
 //    if (jjj % 20 == 0)
     {
-        vect3 pos_lidar;
-        pos_lidar = state_point.pos + state_point.rot * state_point.offset_T_L_I;
-        msg_lidar_pose.header.stamp = ros::Time().fromSec(lidar_end_time);
-        msg_lidar_pose.header.frame_id = "camera_init";
-        msg_lidar_pose.pose.position.x = pos_lidar(0);
-        msg_lidar_pose.pose.position.y = pos_lidar(1);
-        msg_lidar_pose.pose.position.z = pos_lidar(2);
-        msg_lidar_pose.pose.orientation.x = geoQuat.x;
-        msg_lidar_pose.pose.orientation.y = geoQuat.y;
-        msg_lidar_pose.pose.orientation.z = geoQuat.z;
-        msg_lidar_pose.pose.orientation.w = geoQuat.w;
-        path_lidar.poses.push_back(msg_lidar_pose);
+        vect3 pos_target;
+        pos_target = state_point.pos + state_point.rot * gt_T_wrt_IMU;
+        msg_target_pose.header.stamp = ros::Time().fromSec(lidar_end_time);
+        msg_target_pose.header.frame_id = "camera_init";
+        msg_target_pose.pose.position.x = pos_target(0);
+        msg_target_pose.pose.position.y = pos_target(1);
+        msg_target_pose.pose.position.z = pos_target(2);
+        Eigen::Quaterniond quat_target(state_point.rot * gt_R_wrt_IMU);
+        msg_target_pose.pose.orientation.x = quat_target.x();
+        msg_target_pose.pose.orientation.y = quat_target.y();
+        msg_target_pose.pose.orientation.z = quat_target.z();
+        msg_target_pose.pose.orientation.w = quat_target.w();
+        path_target.poses.push_back(msg_target_pose);
         state_body_last = state_point;
     }
     //
@@ -910,6 +918,14 @@ int main(int argc, char** argv)
         cout << "~~~~"<<ROOT_DIR<<" file opened" << endl;
     else
         cout << "~~~~"<<ROOT_DIR<<" doesn't exist" << endl;
+
+    nh.param<vector<double>>("ground_truth/extrinsic_T", gt_extrinT, vector<double>());
+    nh.param<vector<double>>("ground_truth/extrinsic_R", gt_extrinR, vector<double>());
+    gt_T_wrt_IMU<<VEC_FROM_ARRAY(gt_extrinT);
+    gt_R_wrt_IMU<<MAT_FROM_ARRAY(gt_extrinR);
+    FILE *fp_target;
+    string pos_target_dir = root_dir + "/Log/target_path.txt";
+
 
     /*** ROS subscribe initialization ***/
     ros::Subscriber sub_pcl = p_pre->lidar_type == AVIA ? \
@@ -1127,20 +1143,20 @@ int main(int argc, char** argv)
     if (runtime_pos_log)
     {
         printf("\n..............Saving path................\n");
-        ofstream of("/tmp/path.txt");
+        ofstream of(pos_target_dir);
         if (of.is_open())
         {
             of.setf(ios::fixed, ios::floatfield);
             of.precision(6);
-            for (int i = 0; i < (int)path_lidar.poses.size(); ++i) {
-                of<< path_lidar.poses[i].header.stamp.toSec()<< " "
-                  <<path_lidar.poses[i].pose.position.x<< " "
-                  <<path_lidar.poses[i].pose.position.y<< " "
-                  <<path_lidar.poses[i].pose.position.z<< " "
-                  <<path_lidar.poses[i].pose.orientation.x<< " "
-                  <<path_lidar.poses[i].pose.orientation.y<< " "
-                  <<path_lidar.poses[i].pose.orientation.z<< " "
-                  <<path_lidar.poses[i].pose.orientation.w<< "\n";
+            for (int i = 0; i < (int)path_target.poses.size(); ++i) {
+                of<< path_target.poses[i].header.stamp.toSec()<< " "
+                  <<path_target.poses[i].pose.position.x<< " "
+                  <<path_target.poses[i].pose.position.y<< " "
+                  <<path_target.poses[i].pose.position.z<< " "
+                  <<path_target.poses[i].pose.orientation.x<< " "
+                  <<path_target.poses[i].pose.orientation.y<< " "
+                  <<path_target.poses[i].pose.orientation.z<< " "
+                  <<path_target.poses[i].pose.orientation.w<< "\n";
             }
             of.close();
         }
