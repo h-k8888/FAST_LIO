@@ -27,7 +27,7 @@ mapping:
 
 # prism or RTK in IMU frame
 ground_truth:
-    extrinsic_T: [ 0.16, 0.0, 0.0 ]   # M2DGR dataset, GNSS IMU in body (handsfree IMU) frame
+    extrinsic_T: [ 0.16, 0.0, 0.84 ]   # M2DGR dataset, GNSS IMU in body (handsfree IMU) frame
     extrinsic_R: [ 1, 0, 0,
                    0, 1, 0,
                    0, 0, 1 ]
