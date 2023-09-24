@@ -10,6 +10,7 @@ preprocess:
     scan_line: 16
     timestamp_unit: 3                 # 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
     blind: 2
+    record_end_time: false       # start time = timestamp - 0.1
 
 mapping:
     acc_cov: 6.0e-2
