@@ -27,8 +27,8 @@ mapping:
 
 # prism or RTK in IMU frame
 ground_truth:
-#    extrinsic_T: [ 0.16, 0.0, 0.84 ]   # M2DGR dataset, GNSS IMU in body (handsfree IMU) frame
-    extrinsic_T: [0.27255, -0.00053, 0.17954]  # M2DGR dataset, LiDAR in body (handsfree IMU) frame
+    extrinsic_T: [ 0.16, 0.0, 0.84 ]   # M2DGR dataset, GNSS IMU in body (handsfree IMU) frame
+#    extrinsic_T: [0.27255, -0.00053, 0.17954]  # M2DGR dataset, LiDAR in body (handsfree IMU) frame
     extrinsic_R: [ 1, 0, 0,
                    0, 1, 0,
                    0, 0, 1 ]
@@ -43,3 +43,4 @@ pcd_save:
     pcd_save_en: false
     interval: -1                 # how many LiDAR frames saved in each pcd file; 
                                  # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
+    save_final_map: true

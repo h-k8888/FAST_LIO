@@ -73,6 +73,7 @@ double match_time = 0, solve_time = 0, solve_const_H_time = 0;
 int    kdtree_size_st = 0, kdtree_size_end = 0, add_point_size = 0, kdtree_delete_counter = 0;
 bool   runtime_pos_log = false, pcd_save_en = false, time_sync_en = false, extrinsic_est_en = true, path_en = true;
 /**************************/
+bool save_final_map;
 
 float res_last[100000] = {0.0};
 float DET_RANGE = 300.0f;
@@ -881,7 +882,9 @@ int main(int argc, char** argv)
     nh.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
     nh.param<vector<double>>("mapping/extrinsic_R", extrinR, vector<double>());
     cout<<"p_pre->lidar_type "<<p_pre->lidar_type<<endl;
-    
+
+    nh.param<bool>("pcd_save/save_final_map", save_final_map, false);
+
     path.header.stamp    = ros::Time::now();
     path.header.frame_id ="camera_init";
 
@@ -1169,6 +1172,17 @@ int main(int argc, char** argv)
             }
             of.close();
         }
+    }
+
+    // save final ikdtree map
+    if(save_final_map) // If you need to see map point, change to "if(1)"
+    {
+        PointVector().swap(ikdtree.PCL_Storage);
+        ikdtree.flatten(ikdtree.Root_Node, ikdtree.PCL_Storage, NOT_RECORD);
+        featsFromMap->clear();
+        featsFromMap->points = ikdtree.PCL_Storage;
+        featsFromMap->resize(featsFromMap->points.size());
+        pcl::io::savePCDFile("/tmp/ikdtree_final_map.pcd", *featsFromMap, true);
     }
     return 0;
 }
