@@ -60,6 +60,7 @@
 #include "preprocess.h"
 #include <ikd-Tree/ikd_Tree.h>
 
+#include <Eigen/Dense>
 #define INIT_TIME           (0.1)
 #define LASER_POINT_COV     (0.001)
 #define MAXN                (720000)
@@ -77,6 +78,7 @@ float res_last[100000] = {0.0};
 float DET_RANGE = 300.0f;
 const float MOV_THRESHOLD = 1.5f;
 double time_diff_lidar_to_imu = 0.0;
+double lidar_time_offset = 0.0;
 
 mutex mtx_buffer;
 condition_variable sig_buffer;
@@ -94,7 +96,6 @@ int    iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0, laserCloudVal
 bool   point_selected_surf[100000] = {0};
 bool   lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
 bool   scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
-int lidar_type;
 
 vector<vector<int>>  pointSearchInd_surf; 
 vector<BoxPointType> cub_needrm;
@@ -130,15 +131,34 @@ M3D Lidar_R_wrt_IMU(Eye3d);
 MeasureGroup Measures;
 esekfom::esekf<state_ikfom, 12, input_ikfom> kf;
 state_ikfom state_point;
+
+//Eigen::VectorXf body_keypose_last(6); //rpy xyz
+state_ikfom state_body_last;
 vect3 pos_lid;
+geometry_msgs::PoseStamped msg_lidar_pose;
+bool have_keyframe = false;
 
 nav_msgs::Path path;
+nav_msgs::Path path_lidar;
 nav_msgs::Odometry odomAftMapped;
 geometry_msgs::Quaternion geoQuat;
 geometry_msgs::PoseStamped msg_body_pose;
 
 shared_ptr<Preprocess> p_pre(new Preprocess());
 shared_ptr<ImuProcess> p_imu(new ImuProcess());
+
+// record begin time for pose interpolation
+deque<double> timestamps_lidar;
+
+//for ground truth
+geometry_msgs::PoseStamped msg_target_pose;
+nav_msgs::Path path_target_begin, path_target_end;
+// for ground truth, target in IMU frame
+vector<double>       gt_extrinT(3, 0.0);
+vector<double>       gt_extrinR(9, 0.0);
+V3D gt_T_wrt_IMU(Zero3d);
+M3D gt_R_wrt_IMU(Eye3d);
+MD(4, 4) gt_wrt_IMU;
 
 void SigHandle(int sig)
 {
@@ -276,12 +296,14 @@ void lasermap_fov_segment()
     kdtree_delete_time = omp_get_wtime() - delete_begin;
 }
 
+double mean_preprocess = 0.0;
 void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg) 
 {
     mtx_buffer.lock();
     scan_count ++;
     double preprocess_start_time = omp_get_wtime();
-    if (msg->header.stamp.toSec() < last_timestamp_lidar)
+    double scan_begin_time = msg->header.stamp.toSec() + lidar_time_offset;
+    if (scan_begin_time < last_timestamp_lidar)
     {
         ROS_ERROR("lidar loop back, clear buffer");
         lidar_buffer.clear();
@@ -290,11 +312,16 @@ void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
     PointCloudXYZI::Ptr  ptr(new PointCloudXYZI());
     p_pre->process(msg, ptr);
     lidar_buffer.push_back(ptr);
-    time_buffer.push_back(msg->header.stamp.toSec());
-    last_timestamp_lidar = msg->header.stamp.toSec();
+    time_buffer.push_back(scan_begin_time);
+    last_timestamp_lidar = scan_begin_time;
+    timestamps_lidar.push_back(last_timestamp_lidar);
     s_plot11[scan_count] = omp_get_wtime() - preprocess_start_time;
+    mean_preprocess = mean_preprocess * (scan_count - 1) / scan_count + s_plot11[scan_count] / scan_count;
     mtx_buffer.unlock();
     sig_buffer.notify_all();
+
+    printf("[ pre-process ]: this time: %0.6f ms, mean : %0.6f ms\n",
+           s_plot11[scan_count] * 1000, mean_preprocess * 1000);
 }
 
 double timediff_lidar_wrt_imu = 0.0;
@@ -376,8 +403,6 @@ bool sync_packages(MeasureGroup &meas)
     {
         meas.lidar = lidar_buffer.front();
         meas.lidar_beg_time = time_buffer.front();
-
-
         if (meas.lidar->points.size() <= 1) // time too little
         {
             lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
@@ -393,8 +418,6 @@ bool sync_packages(MeasureGroup &meas)
             lidar_end_time = meas.lidar_beg_time + meas.lidar->points.back().curvature / double(1000);
             lidar_mean_scantime += (meas.lidar->points.back().curvature / double(1000) - lidar_mean_scantime) / scan_num;
         }
-        if(lidar_type == MARSIM)
-            lidar_end_time = meas.lidar_beg_time;
 
         meas.lidar_end_time = lidar_end_time;
 
@@ -633,6 +656,28 @@ void publish_path(const ros::Publisher pubPath)
         path.poses.push_back(msg_body_pose);
         pubPath.publish(path);
     }
+    {
+        vect3 pos_target;
+        pos_target = state_point.pos + state_point.rot * gt_T_wrt_IMU;
+        Eigen::Quaterniond quat_target(state_point.rot * gt_R_wrt_IMU);
+//        Eigen::Quaterniond quat_target(T.block<3, 3>(0, 0));
+
+        msg_target_pose.header.stamp = ros::Time().fromSec(lidar_end_time);
+        msg_target_pose.header.frame_id = "camera_init";
+        msg_target_pose.pose.position.x = pos_target(0);
+        msg_target_pose.pose.position.y = pos_target(1);
+        msg_target_pose.pose.position.z = pos_target(2);
+//        msg_target_pose.pose.position.x = T(0, 3);
+//        msg_target_pose.pose.position.y = T(1, 3);
+//        msg_target_pose.pose.position.z = T(2, 3);
+        msg_target_pose.pose.orientation.x = quat_target.x();
+        msg_target_pose.pose.orientation.y = quat_target.y();
+        msg_target_pose.pose.orientation.z = quat_target.z();
+        msg_target_pose.pose.orientation.w = quat_target.w();
+        path_target_end.poses.push_back(msg_target_pose);
+//        have_keyframe = true;
+//        return;
+    }
 }
 
 void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data)
@@ -753,6 +798,91 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
     solve_time += omp_get_wtime() - solve_start_;
 }
 
+void saveTraj(const string & pose_target_file)
+{
+    //also interpolate pose at lidar begin time
+    int begin_time_ptr = 0;
+    int begin_time_size = timestamps_lidar.size();
+    double begin_time = timestamps_lidar[0];
+//        int end_time_ptr_left = 0;
+    double end_time_left = path_target_end.poses[0].header.stamp.toSec();
+    while (begin_time_ptr < begin_time_size) {
+        begin_time = timestamps_lidar[begin_time_ptr];
+        if (begin_time > end_time_left)
+            break;
+        ++begin_time_ptr;
+    }
+
+    printf("\n..............Saving path................\n");
+    printf("path file: %s\n", pose_target_file.c_str());
+    ofstream of_beg(pose_target_file);
+    of_beg.setf(ios::fixed, ios::floatfield);
+    of_beg.precision(12);
+    of_beg<< path_target_end.poses[0].header.stamp.toSec()<< " "
+          <<path_target_end.poses[0].pose.position.x<< " "
+          <<path_target_end.poses[0].pose.position.y<< " "
+          <<path_target_end.poses[0].pose.position.z<< " "
+          <<path_target_end.poses[0].pose.orientation.x<< " "
+          <<path_target_end.poses[0].pose.orientation.y<< " "
+          <<path_target_end.poses[0].pose.orientation.z<< " "
+          <<path_target_end.poses[0].pose.orientation.w<< "\n";
+
+    for (int i = 1; i < path_target_end.poses.size(); ++i) {
+        double end_time_right = path_target_end.poses[i].header.stamp.toSec();
+//                printf("end time left: %f\n", end_time_left);
+        while (begin_time_ptr < begin_time_size && timestamps_lidar[begin_time_ptr] < end_time_right) {
+            begin_time = timestamps_lidar[begin_time_ptr];
+            if (abs(begin_time - end_time_right) < 0.00001 || abs(begin_time - end_time_left) < 0.00001) {
+                ++begin_time_ptr;
+                continue;
+            }
+            //interpolate between end time left and right
+            double dt_l = begin_time - end_time_left;
+            double dt_r = end_time_right - begin_time;
+            double dt_l_r = end_time_right - end_time_left;
+            double ratio_l = dt_l / dt_l_r;
+            double ratio_r = dt_r / dt_l_r;
+
+            const auto &pose_l = path_target_end.poses[i - 1].pose;
+            const auto &pose_r = path_target_end.poses[i].pose;
+
+            V3D pos_l(pose_l.position.x, pose_l.position.y, pose_l.position.z);
+            V3D pos_r(pose_r.position.x, pose_r.position.y, pose_r.position.z);
+
+            Eigen::Quaterniond q_l(pose_l.orientation.w, pose_l.orientation.x, pose_l.orientation.y,
+                                   pose_l.orientation.z);
+            Eigen::Quaterniond q_r(pose_r.orientation.w, pose_r.orientation.x, pose_r.orientation.y,
+                                   pose_r.orientation.z);
+
+            Eigen::Quaterniond  q_begin_time = q_l.slerp(ratio_l, q_r);
+            V3D pos_begin_time = pos_l * ratio_r + pos_r * ratio_l;
+
+            of_beg<< begin_time << " "
+                  <<pos_begin_time(0)<< " " <<pos_begin_time(1)<< " " <<pos_begin_time(2)<< " "
+                  <<q_begin_time.x()<< " "
+                  <<q_begin_time.y()<< " "
+                  <<q_begin_time.z()<< " "
+                  <<q_begin_time.w()<< "\n";
+
+            ++begin_time_ptr;
+        }
+//                if (abs(begin_time - end_time_right) < 0.000001)
+//                    ++begin_time_ptr;
+//                printf("end_time_right: %f\n", end_time_right);
+
+        of_beg<< path_target_end.poses[i].header.stamp.toSec()<< " "
+              <<path_target_end.poses[i].pose.position.x<< " "
+              <<path_target_end.poses[i].pose.position.y<< " "
+              <<path_target_end.poses[i].pose.position.z<< " "
+              <<path_target_end.poses[i].pose.orientation.x<< " "
+              <<path_target_end.poses[i].pose.orientation.y<< " "
+              <<path_target_end.poses[i].pose.orientation.z<< " "
+              <<path_target_end.poses[i].pose.orientation.w<< "\n";
+        end_time_left = end_time_right;
+    }
+    of_beg.close();
+}
+
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "laserMapping");
@@ -768,6 +898,7 @@ int main(int argc, char** argv)
     nh.param<string>("common/imu_topic", imu_topic,"/livox/imu");
     nh.param<bool>("common/time_sync_en", time_sync_en, false);
     nh.param<double>("common/time_offset_lidar_to_imu", time_diff_lidar_to_imu, 0.0);
+    nh.param<double>("common/lidar_time_offset", lidar_time_offset, 0.0);
     nh.param<double>("filter_size_corner",filter_size_corner_min,0.5);
     nh.param<double>("filter_size_surf",filter_size_surf_min,0.5);
     nh.param<double>("filter_size_map",filter_size_map_min,0.5);
@@ -779,7 +910,7 @@ int main(int argc, char** argv)
     nh.param<double>("mapping/b_gyr_cov",b_gyr_cov,0.0001);
     nh.param<double>("mapping/b_acc_cov",b_acc_cov,0.0001);
     nh.param<double>("preprocess/blind", p_pre->blind, 0.01);
-    nh.param<int>("preprocess/lidar_type", lidar_type, AVIA);
+    nh.param<int>("preprocess/lidar_type", p_pre->lidar_type, AVIA);
     nh.param<int>("preprocess/scan_line", p_pre->N_SCANS, 16);
     nh.param<int>("preprocess/timestamp_unit", p_pre->time_unit, US);
     nh.param<int>("preprocess/scan_rate", p_pre->SCAN_RATE, 10);
@@ -791,10 +922,18 @@ int main(int argc, char** argv)
     nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
     nh.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
     nh.param<vector<double>>("mapping/extrinsic_R", extrinR, vector<double>());
-
-    p_pre->lidar_type = lidar_type;
     cout<<"p_pre->lidar_type "<<p_pre->lidar_type<<endl;
-    
+
+    // for ground truth target
+    nh.param<vector<double>>("ground_truth/extrinsic_T", gt_extrinT, vector<double>());
+    nh.param<vector<double>>("ground_truth/extrinsic_R", gt_extrinR, vector<double>());
+    gt_T_wrt_IMU<<VEC_FROM_ARRAY(gt_extrinT);
+    gt_R_wrt_IMU<<MAT_FROM_ARRAY(gt_extrinR);
+    gt_wrt_IMU.block<3, 3>(0, 0) = gt_R_wrt_IMU;
+    gt_wrt_IMU.block<3, 1>(0, 3) = gt_T_wrt_IMU;
+    gt_wrt_IMU(3, 0) = 0; gt_wrt_IMU(3, 1) = 0; gt_wrt_IMU(3, 2) = 0; gt_wrt_IMU(3, 3) = 1;
+    cout << "gt_wrt_IMU:\n" << gt_wrt_IMU << endl;
+
     path.header.stamp    = ros::Time::now();
     path.header.frame_id ="camera_init";
 
@@ -822,7 +961,7 @@ int main(int argc, char** argv)
     p_imu->set_acc_cov(V3D(acc_cov, acc_cov, acc_cov));
     p_imu->set_gyr_bias_cov(V3D(b_gyr_cov, b_gyr_cov, b_gyr_cov));
     p_imu->set_acc_bias_cov(V3D(b_acc_cov, b_acc_cov, b_acc_cov));
-    p_imu->lidar_type = lidar_type;
+
     double epsi[23] = {0.001};
     fill(epsi, epsi+23, 0.001);
     kf.init_dyn_share(get_f, df_dx, df_dw, h_share_model, NUM_MAX_ITERATIONS, epsi);
@@ -840,6 +979,9 @@ int main(int argc, char** argv)
         cout << "~~~~"<<ROOT_DIR<<" file opened" << endl;
     else
         cout << "~~~~"<<ROOT_DIR<<" doesn't exist" << endl;
+
+    string pos_target_begin_time = root_dir + "/Log/target_begin_path.txt";
+    string pos_target_end_time = root_dir + "/Log/target_end_path.txt";
 
     /*** ROS subscribe initialization ***/
     ros::Subscriber sub_pcl = p_pre->lidar_type == AVIA ? \
@@ -903,6 +1045,8 @@ int main(int argc, char** argv)
             /*** downsample the feature points in a scan ***/
             downSizeFilterSurf.setInputCloud(feats_undistort);
             downSizeFilterSurf.filter(*feats_down_body);
+            ROS_INFO("feats_undistort: %d, feats_down_body: %d", (int)feats_undistort->size(), (int)feats_down_body->size());
+
             t1 = omp_get_wtime();
             feats_down_size = feats_down_body->points.size();
             /*** initialize the map kdtree ***/
@@ -1051,5 +1195,23 @@ int main(int argc, char** argv)
         fclose(fp2);
     }
 
+
+    //save globalPath
+    string pose_target_file = root_dir + "/Log/target_path.txt";
+    saveTraj(pose_target_file);
+//    if (runtime_pos_log)
+    {
+        string times_file = root_dir + "/Log/" + "times.txt";
+        ofstream of_times(times_file);
+        if (of_times.is_open())
+        {
+            of_times.setf(ios::fixed, ios::floatfield);
+            of_times.precision(20);
+            for (int i = 0; i < (int)timestamps_lidar.size(); ++i) {
+                of_times<< timestamps_lidar[i] << "\n";
+            }
+            of_times.close();
+        }
+    }
     return 0;
 }

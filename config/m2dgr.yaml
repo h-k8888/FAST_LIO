@@ -13,10 +13,10 @@ preprocess:
     blind: 2
 
 mapping:
-    acc_cov: 3.7686306102624571e-02
-    gyr_cov: 2.3417543020438883e-03
-    b_acc_cov: 1.1416642385952368e-03
-    b_gyr_cov: 1.4428407712885209e-05
+    acc_cov: 0.1
+    gyr_cov: 0.1
+    b_acc_cov: 0.0001
+    b_gyr_cov: 0.0001
     fov_degree:    180
     det_range:     100.0
     extrinsic_est_en:  false      # true: enable the online estimation of IMU-LiDAR extrinsic,
@@ -24,14 +24,6 @@ mapping:
     extrinsic_R: [ 1, 0, 0, 
                    0, 1, 0, 
                    0, 0, 1]
-
-# prism or RTK in IMU frame
-ground_truth:
-    extrinsic_T: [ 0.16, 0.0, 0.84 ]   # M2DGR dataset, GNSS IMU in body (handsfree IMU) frame
-#    extrinsic_T: [0.27255, -0.00053, 0.17954]  # M2DGR dataset, LiDAR in body (handsfree IMU) frame
-    extrinsic_R: [ 1, 0, 0,
-                   0, 1, 0,
-                   0, 0, 1 ]
 
 publish:
     path_en:  true
@@ -43,4 +35,12 @@ pcd_save:
     pcd_save_en: false
     interval: -1                 # how many LiDAR frames saved in each pcd file; 
                                  # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
-    save_final_map: true
+
+
+# prism or RTK in IMU frame
+ground_truth:
+    extrinsic_T: [ 0.16, 0.0, 0.84 ]   ## GNSS in IMU frame
+#    extrinsic_T: [ 0.27255, -0.00053, 0.17954]    ## LiDAR in IMU frame
+    extrinsic_R: [ 1, 0, 0,
+                   0, 1, 0,
+                   0, 0, 1 ]
